@@ -1,0 +1,6 @@
+edition = "2024"
+style_edition = "2024"
+format_macro_matchers = true
+unstable_features = true
+format_macro_bodies = true
+newline_style = "Unix"

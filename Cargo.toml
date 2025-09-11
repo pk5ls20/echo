@@ -1,0 +1,100 @@
+[workspace]
+resolver = "2"
+members = ["echo-macros"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+
+[package]
+name = "echo"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+abv = "0.3.0"
+ahash = { version = "0.8.12", features = ["serde"] }
+ammonia = "4.1.1"
+anyhow = "1.0.99"
+axum = { version = "0.8.4", features = ["macros", "json"] }
+base64 = "0.22.1"
+bitvec = { version = "1.0.1", features = ["atomic"] }
+bytes = { version = "1.10.1", features = ["serde"] }
+clap = { version = "4.5.47", features = ["derive"] }
+cookie = { version = "0.18.1", features = ["secure"] }
+echo-macros = { path = "./echo-macros" }
+figment = { version = "0.10.19", features = ["env", "toml"] }
+frunk = "0.4.4"
+futures = "0.3.31"
+hex = "0.4.3"
+html5ever = "0.35.0"
+infer = "0.19.0"
+leptos = { version = "0.8.8", features = ["ssr", "nightly"] }
+libsqlite3-sys = { version = "=0.30.1", optional = true, features = ["bundled-sqlcipher"] } # should sync with sqlx
+maplit = "1.0.2"
+markup5ever = "0.35.0"
+markup5ever_rcdom = "0.35.0"
+moka = { version = "0.12.10", features = ["logging", "future"] }
+once_cell = "1.21.3"
+parking_lot = "0.12.4"
+paste = "1.0.15"
+phf = { version = "0.13.1", features = ["macros"] }
+prost = "0.14.1"
+rand = { version = "0.9", features = ["std"] }
+rmp-serde = "1.3.0"
+rpassword = { version = "7.4.0", optional = true }
+scc = "3.0.2"
+serde = "1.0.219"
+serde-inline-default = "0.2.3"
+serde_json = "1.0.143"
+sha1 = "0.11.0-rc.2"
+shadow-rs = { version = "1.3.0", default-features = false }
+smallvec = "1.15.1"
+sqlx = { version = "0.8.6", features = ["runtime-tokio", "sqlite", "macros", "time", "json", "uuid"] }
+tempfile = "3.21.0"
+thiserror = "2.0.16"
+time = { version = "0.3.43", features = ["serde"] }
+tokio = { version = "1.47.1", features = ["rt", "rt-multi-thread", "macros", "net", "signal", "fs", "test-util"] }
+tokio-util = { version = "0.7.16", features = ["codec"] }
+totp-rs = { version = "5.7.0", features = ["qr", "serde_support"] }
+tower = { version = "0.5.2", features = ["limit"] }
+tower-cookies = { version = "0.11.0", features = ["private"] }
+tower-http = { version = "0.6.6", features = ["compression-full", "trace"] }
+tracing = "0.1.41"
+tracing-subscriber = { version = "0.3.20", features = ["env-filter", "parking_lot"] }
+unicode-segmentation = "1.12.0"
+url = "2.5.7"
+uuid = { version = "1.18.1", features = ["v4", "v5", "serde"] }
+webauthn-rs = { version = "0.5.2", features = ["danger-allow-state-serialisation"] }
+
+[target.'cfg(target_os = "windows")'.dependencies]
+mimalloc = { version = "0.1.48", optional = true }
+openssl = { version = "=0.10.73", default-features = false } # should sync with webauthn-rs
+
+[target.'cfg(any(target_family="unix"))'.dependencies]
+tikv-jemallocator = { version = "0.6.0", optional = true }
+openssl = { version = "=0.10.73", default-features = false, features = ["vendored"] } # should sync with webauthn-rs
+
+[dev-dependencies]
+ctor = "0.5.0"
+
+[build-dependencies]
+shadow-rs = "1.3.0"
+
+[features]
+default = ["alternative-allocator", "migrate", "secure-cookie"]
+# Use jemalloc on Unix-like systems (when possible) and mimalloc on Windows
+alternative-allocator = ["dep:tikv-jemallocator", "dep:mimalloc"]
+# Enable build-in database migrations (so, fxxk u RustRover)
+migrate = ["sqlx/migrate"]
+# Enable `Secure` flag for cookies (should be used in production with HTTPS)
+secure-cookie = []
+# Enables SQLcipher-based encryption for your echo database.
+sqlcipher = ["dep:libsqlite3-sys", "dep:rpassword"]
+
+[profile.release]
+lto = true
+codegen-units = 1
+opt-level = "s"
+debug = true
+split-debuginfo = "packed"
