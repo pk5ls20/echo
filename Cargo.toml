@@ -54,7 +54,7 @@ sqlx = { version = "0.8.6", features = ["runtime-tokio", "sqlite", "macros", "ti
 tempfile = "3.21.0"
 thiserror = "2.0.16"
 time = { version = "0.3.43", features = ["serde"] }
-tokio = { version = "1.47.1", features = ["rt", "rt-multi-thread", "macros", "net", "signal", "fs", "test-util"] }
+tokio = { version = "1.47.1", features = ["rt", "rt-multi-thread", "macros", "net", "signal", "fs", "test-util", "parking_lot"] }
 tokio-util = { version = "0.7.16", features = ["codec"] }
 totp-rs = { version = "5.7.0", features = ["qr", "serde_support"] }
 tower = { version = "0.5.2", features = ["limit"] }

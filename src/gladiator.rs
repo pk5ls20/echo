@@ -47,6 +47,7 @@ impl<'a> ElementStandardNode<'a> {
                 ..
             } => (name, attrs),
             _ => {
+                // TODO: still unreachable?
                 unreachable!("spilt_element assumes that NodeData is always an NodeData::Element!")
             }
         }
