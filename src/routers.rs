@@ -24,10 +24,15 @@ use crate::services::mfa::MFAService;
 use crate::services::states::EchoState;
 use crate::services::upload_tracker::UploadTrackerService;
 use axum::Router;
+use axum::http::{HeaderName, Request};
 use axum::routing::{get, patch, post, put};
 use std::sync::Arc;
 use tower::ServiceBuilder;
+use tower_http::request_id::{
+    MakeRequestUuid, PropagateRequestIdLayer, RequestId, SetRequestIdLayer,
+};
 use tower_http::trace::TraceLayer;
+use tracing::info_span;
 
 mod echo;
 mod invite_code;
@@ -192,6 +197,7 @@ pub async fn router(state: Arc<EchoState>) -> Router {
             .layer(full_mfa_layer())
             .with_state((state.clone(), hybrid_cache_service.clone()))
     };
+    let trace_header = HeaderName::from_static("x-hananokioku");
     Router::new()
         .nest(
             "/api/v1",
@@ -206,7 +212,27 @@ pub async fn router(state: Arc<EchoState>) -> Router {
         )
         .layer(
             ServiceBuilder::new()
-                .layer(TraceLayer::new_for_http())
+                .layer(SetRequestIdLayer::new(
+                    trace_header.clone(),
+                    MakeRequestUuid,
+                ))
+                .layer(
+                    TraceLayer::new_for_http().make_span_with(|req: &Request<_>| {
+                        let rid = req
+                            .extensions()
+                            .get::<RequestId>()
+                            .and_then(|r| r.header_value().to_str().ok())
+                            .expect("Cannot get request id");
+                        info_span!(
+                            "http.request",
+                            request_id = %rid,
+                            method = %req.method(),
+                            uri = %req.uri(),
+                            version = ?req.version(),
+                        )
+                    }),
+                )
+                .layer(PropagateRequestIdLayer::new(trace_header))
                 .concurrency_limit(state.config.common.concurrency_limit),
         )
         .with_state((state, hybrid_cache_service))

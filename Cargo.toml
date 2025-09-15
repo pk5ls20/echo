@@ -55,11 +55,11 @@ tempfile = "3.21.0"
 thiserror = "2.0.16"
 time = { version = "0.3.43", features = ["serde"] }
 tokio = { version = "1.47.1", features = ["rt", "rt-multi-thread", "macros", "net", "signal", "fs", "test-util", "parking_lot"] }
-tokio-util = { version = "0.7.16", features = ["codec"] }
+tokio-util = { version = "0.7.16", features = ["codec", "io"] }
 totp-rs = { version = "5.7.0", features = ["qr", "serde_support"] }
 tower = { version = "0.5.2", features = ["limit"] }
 tower-cookies = { version = "0.11.0", features = ["private"] }
-tower-http = { version = "0.6.6", features = ["compression-full", "trace"] }
+tower-http = { version = "0.6.6", features = ["trace", "request-id"] }
 tracing = "0.1.41"
 tracing-subscriber = { version = "0.3.20", features = ["env-filter", "parking_lot"] }
 unicode-segmentation = "1.12.0"
