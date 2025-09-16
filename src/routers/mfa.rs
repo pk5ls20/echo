@@ -3,18 +3,22 @@ use crate::layers::session::SessionHelper;
 use crate::models::api::prelude::*;
 use crate::models::mfa::{
     MFAAuthMethod, MFAOpType, MfaAuthLog, MfaInfo, NewMfaAuthLog, NewMfaAuthLogInfo,
+    WebauthnCredential,
 };
 use crate::models::session::BasicAuthData;
 use crate::models::users::Role;
 use crate::services::hybrid_cache::HybridCacheService;
 use crate::services::mfa::MFAService;
 use crate::services::states::EchoState;
-use crate::services::states::db::{PageQueryBinder, PageQueryResult};
+use crate::services::states::db::{
+    DataBaseError, EchoDatabaseExecutor, PageQueryBinder, PageQueryResult,
+};
 use axum::Json;
 use axum::extract::{Query, State};
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use time::OffsetDateTime;
+use totp_rs::TOTP;
 use webauthn_rs::prelude::*;
 
 pub type MFARouterState = State<(Arc<EchoState>, Arc<MFAService>, Arc<HybridCacheService>)>;
@@ -35,31 +39,38 @@ pub async fn totp_setup(
         .get_user_by_user_id(current_user_info.user_id)
         .await
         .map_err(|e| internal!(e, "Failed to fetch user"))?;
-    let mfa_repo = state.db.mfa();
-    if let Some(info) = mfa_repo
-        .list_user_totp_credential(current_user_id)
-        .await
-        .map_err(|e| internal!(e, "Failed to get MFA info"))?
-    {
-        return Err(conflict!(format!(
-            "TOTP already configured at {}, last used at {:?}",
-            info.created_at, info.last_used_at
-        )));
-    }
-    let totp = mfa_service
-        .generate_totp(current_user.username.clone())
-        .map_err(|e| internal!(e, "Failed to generate TOTP"))?;
-    let cred = mfa_service
-        .save_totp(current_user_id, &totp)
-        .map_err(|e| internal!(e, "Failed to serialize TOTP"))?;
-    mfa_repo
-        .insert_totp_credential(cred, client_info.ip_address, client_info.user_agent)
-        .await
-        .map_err(|e| internal!(e, "Failed to save TOTP credential"))?;
-    mfa_repo
-        .enable_mfa(current_user_info.user_id)
-        .await
-        .map_err(|e| internal!(e, "Failed to enable mfa"))?;
+    // TODO: RustRover cannot infer the type here, so fxxk u jetbrains!
+    let totp: TOTP = state
+        .db
+        .transaction(async |mut exec: EchoDatabaseExecutor<'_>| {
+            if let Some(info) = exec
+                .mfa()
+                .list_user_totp_credential(current_user_id)
+                .await
+                .map_err(|e| internal!(e, "Failed to get MFA info"))?
+            {
+                return Err(conflict!(format!(
+                    "TOTP already configured at {}, last used at {:?}",
+                    info.created_at, info.last_used_at
+                )));
+            }
+            let totp = mfa_service
+                .generate_totp(current_user.username.clone())
+                .map_err(|e| internal!(e, "Failed to generate TOTP"))?;
+            let cred = mfa_service
+                .save_totp(current_user_id, &totp)
+                .map_err(|e| internal!(e, "Failed to serialize TOTP"))?;
+            exec.mfa()
+                .insert_totp_credential(cred, client_info.ip_address, client_info.user_agent)
+                .await
+                .map_err(|e| internal!(e, "Failed to save TOTP credential"))?;
+            exec.mfa()
+                .enable_mfa(current_user_info.user_id)
+                .await
+                .map_err(|e| internal!(e, "Failed to enable mfa"))?;
+            Ok(totp)
+        })
+        .await?;
     Ok(general_json_res!(
         "TOTP created",
         TotpSetupRes {
@@ -81,62 +92,67 @@ pub async fn totp_verify(
     Json(req): Json<TotpVerifyReq>,
 ) -> ApiResult<Json<GeneralResponse<()>>> {
     let user_id = current_user_info.user_id;
-    let mfa_repo = state.db.mfa();
-    let cred = mfa_repo
-        .list_user_totp_credential(user_id)
-        .await
-        .map_err(|e| internal!(e, "Failed to load TOTP credential"))?
-        .ok_or(bad_request!("TOTP is not configured"))?;
-    let totp = mfa_service
-        .load_totp(&cred.totp_credential_data)
-        .map_err(|e| internal!(e, "Failed to decode TOTP"))?;
-    let current = totp
-        .generate_current()
-        .map_err(|e| internal!(e, "Failed to generate current TOTP"))?;
-    tracing::debug!("Current TOTP: {}, provided: {}", current, req.code);
-    if current != req.code {
-        mfa_repo
-            .insert_mfa_op_access_log(
-                user_id,
-                NewMfaAuthLog {
+    state
+        .db
+        .transaction(async |mut exec: EchoDatabaseExecutor<'_>| {
+            let cred = exec
+                .mfa()
+                .list_user_totp_credential(user_id)
+                .await
+                .map_err(|e| internal!(e, "Failed to load TOTP credential"))?
+                .ok_or(bad_request!("TOTP is not configured"))?;
+            let totp = mfa_service
+                .load_totp(&cred.totp_credential_data)
+                .map_err(|e| internal!(e, "Failed to decode TOTP"))?;
+            let current = totp
+                .generate_current()
+                .map_err(|e| internal!(e, "Failed to generate current TOTP"))?;
+            if current != req.code {
+                exec.mfa()
+                    .insert_mfa_op_access_log(
+                        user_id,
+                        NewMfaAuthLog {
+                            user_id,
+                            op_type: MFAOpType::Auth,
+                            info: NewMfaAuthLogInfo {
+                                auth_method: MFAAuthMethod::Totp,
+                                is_success: false,
+                                ip_address: client_info.ip_address,
+                                user_agent: client_info.user_agent,
+                                credential_id: Some(cred.id),
+                                error_message: Some("Invalid TOTP code".to_string()),
+                            },
+                        },
+                    )
+                    .await
+                    .map_err(|e| internal!(e, "Failed to insert MFA log"))?;
+                return Err(bad_request!("Invalid TOTP code"));
+            }
+            exec.mfa()
+                .update_totp_last_used(user_id)
+                .await
+                .map_err(|e| internal!(e, "Failed to update last used"))?;
+            exec.mfa()
+                .insert_mfa_op_access_log(
                     user_id,
-                    op_type: MFAOpType::Auth,
-                    info: NewMfaAuthLogInfo {
-                        auth_method: MFAAuthMethod::Totp,
-                        is_success: false,
-                        ip_address: client_info.ip_address,
-                        user_agent: client_info.user_agent,
-                        credential_id: Some(cred.id),
-                        error_message: Some("Invalid TOTP code".to_string()),
+                    NewMfaAuthLog {
+                        user_id,
+                        op_type: MFAOpType::Auth,
+                        info: NewMfaAuthLogInfo {
+                            auth_method: MFAAuthMethod::Totp,
+                            is_success: true,
+                            ip_address: client_info.ip_address,
+                            user_agent: client_info.user_agent,
+                            credential_id: Some(cred.id),
+                            error_message: None,
+                        },
                     },
-                },
-            )
-            .await
-            .map_err(|e| internal!(e, "Failed to insert MFA log"))?;
-        return Err(bad_request!("Invalid TOTP code"));
-    }
-    mfa_repo
-        .update_totp_last_used(user_id)
-        .await
-        .map_err(|e| internal!(e, "Failed to update last used"))?;
-    mfa_repo
-        .insert_mfa_op_access_log(
-            user_id,
-            NewMfaAuthLog {
-                user_id,
-                op_type: MFAOpType::Auth,
-                info: NewMfaAuthLogInfo {
-                    auth_method: MFAAuthMethod::Totp,
-                    is_success: true,
-                    ip_address: client_info.ip_address,
-                    user_agent: client_info.user_agent,
-                    credential_id: Some(cred.id),
-                    error_message: None,
-                },
-            },
-        )
-        .await
-        .map_err(|e| internal!(e, "Failed to insert MFA log"))?;
+                )
+                .await
+                .map_err(|e| internal!(e, "Failed to insert MFA log"))?;
+            Ok(())
+        })
+        .await?;
     session
         .sign_pre_mfa(true, true)
         .map_err(|e| internal!(e, "Failed to sign pre-MFA auth session in TOTP verify"))?;
@@ -180,10 +196,12 @@ pub async fn totp_list(
     if q.user_id != current_user_info.user_id && current_user.role != Role::Admin {
         return Err(bad_request!("Cannot list TOTP for other users"));
     }
-    let list = state
+    // TODO: RustRover cannot infer the type here, so fxxk u jetbrains!
+    let list: Vec<TotpListItem> = state
         .db
-        .mfa()
-        .list_user_totp_credential(q.user_id)
+        .single(async |mut exec: EchoDatabaseExecutor<'_>| {
+            exec.mfa().list_user_totp_credential(q.user_id).await
+        })
         .await
         .map_err(|e| internal!(e, "Failed to list TOTP"))?
         .map(|c| TotpListItem {
@@ -218,8 +236,12 @@ pub async fn totp_delete(
     }
     state
         .db
-        .mfa()
-        .delete_totp_credential(req.user_id, client_info.ip_address, client_info.user_agent)
+        .transaction(async |mut exec: EchoDatabaseExecutor<'_>| {
+            exec.mfa()
+                .delete_totp_credential(req.user_id, client_info.ip_address, client_info.user_agent)
+                .await?;
+            Ok::<_, DataBaseError>(())
+        })
         .await
         .map_err(|e| internal!(e, "Failed to delete TOTP"))?;
     Ok(general_json_res!("TOTP deleted"))
@@ -236,8 +258,11 @@ pub async fn webauthn_setup_start(
         .map_err(|e| internal!(e, "Failed to fetch user"))?;
     let existing = state
         .db
-        .mfa()
-        .list_user_webauthn_credentials(current_user_info.user_id)
+        .single(async |mut exec: EchoDatabaseExecutor<'_>| {
+            exec.mfa()
+                .list_user_webauthn_credentials(current_user_info.user_id)
+                .await
+        })
         .await
         .map_err(|e| internal!(e, "Failed to list existing passkeys"))?;
     let ccr = mfa_service
@@ -270,15 +295,20 @@ pub async fn webauthn_setup_finish(
         )
         .await
         .map_err(|e| internal!(e, "Failed to finish passkey registration"))?;
-    let mfa_repo = state.db.mfa();
-    mfa_repo
-        .insert_webauthn_credential(cred, client_info.ip_address, client_info.user_agent)
-        .await
-        .map_err(|e| internal!(e, "Failed to insert passkey"))?;
-    mfa_repo
-        .enable_mfa(current_user_info.user_id)
-        .await
-        .map_err(|e| internal!(e, "Failed to enable mfa"))?;
+    state
+        .db
+        .transaction(async |mut exec: EchoDatabaseExecutor<'_>| {
+            exec.mfa()
+                .insert_webauthn_credential(cred, client_info.ip_address, client_info.user_agent)
+                .await
+                .map_err(|e| internal!(e, "Failed to insert passkey"))?;
+            exec.mfa()
+                .enable_mfa(current_user_info.user_id)
+                .await
+                .map_err(|e| internal!(e, "Failed to enable mfa"))?;
+            Ok::<_, ApiError>(())
+        })
+        .await?;
     Ok(general_json_res!("Passkey registered"))
 }
 
@@ -291,12 +321,16 @@ pub async fn webauthn_auth_start(
         .get_user_by_user_id(current_user_info.user_id)
         .await
         .map_err(|e| internal!(e, "Failed to fetch user"))?;
-    let existing = state
+    // TODO: RustRover cannot infer the type here, so fxxk u jetbrains!
+    let existing: Vec<WebauthnCredential> = state
         .db
-        .mfa()
-        .list_user_webauthn_credentials(current_user_info.user_id)
+        .single(async |mut exec: EchoDatabaseExecutor<'_>| {
+            exec.mfa()
+                .list_user_webauthn_credentials(current_user_info.user_id)
+                .await
+        })
         .await
-        .map_err(|e| internal!(e, "Failed to list passkeys"))?;
+        .map_err(|e| internal!(e, "Failed to list existing passkeys"))?;
     if existing.is_empty() {
         return Err(bad_request!("No passkey configured"));
     }
@@ -319,53 +353,58 @@ pub async fn webauthn_auth_finish(
         .get_user_by_user_id(current_user_info.user_id)
         .await
         .map_err(|e| internal!(e, "Failed to fetch user"))?;
-    let mfa_op = state.db.mfa();
-    match mfa_service
-        .finish_passkey_authentication(current_user.username.clone(), req)
-        .await
-    {
-        Ok(_) => {
-            mfa_op
-                .insert_mfa_op_access_log(
-                    current_user_info.user_id,
-                    NewMfaAuthLog {
-                        user_id: current_user_info.user_id,
-                        op_type: MFAOpType::Auth,
-                        info: NewMfaAuthLogInfo {
-                            auth_method: MFAAuthMethod::Webauthn,
-                            is_success: true,
-                            ip_address: client_info.ip_address,
-                            user_agent: client_info.user_agent,
-                            credential_id: None,
-                            error_message: None,
-                        },
-                    },
-                )
+    state
+        .db
+        .transaction(async |mut exec: EchoDatabaseExecutor<'_>| {
+            match mfa_service
+                .finish_passkey_authentication(current_user.username.clone(), req)
                 .await
-                .map_err(|e| internal!(e, "Failed to insert MFA log"))?;
-        }
-        Err(e) => {
-            mfa_op
-                .insert_mfa_op_access_log(
-                    current_user_info.user_id,
-                    NewMfaAuthLog {
-                        user_id: current_user_info.user_id,
-                        op_type: MFAOpType::Auth,
-                        info: NewMfaAuthLogInfo {
-                            auth_method: MFAAuthMethod::Webauthn,
-                            is_success: false,
-                            ip_address: client_info.ip_address,
-                            user_agent: client_info.user_agent,
-                            credential_id: None,
-                            error_message: Some(format!("{}", e)),
-                        },
-                    },
-                )
-                .await
-                .map_err(|e| internal!(e, "Failed to insert MFA log"))?;
-            return Err(bad_request!(e, "Failed to finish passkey authentication"));
-        }
-    }
+            {
+                Ok(_) => {
+                    exec.mfa()
+                        .insert_mfa_op_access_log(
+                            current_user_info.user_id,
+                            NewMfaAuthLog {
+                                user_id: current_user_info.user_id,
+                                op_type: MFAOpType::Auth,
+                                info: NewMfaAuthLogInfo {
+                                    auth_method: MFAAuthMethod::Webauthn,
+                                    is_success: true,
+                                    ip_address: client_info.ip_address,
+                                    user_agent: client_info.user_agent,
+                                    credential_id: None,
+                                    error_message: None,
+                                },
+                            },
+                        )
+                        .await
+                        .map_err(|e| internal!(e, "Failed to insert MFA log"))?;
+                }
+                Err(e) => {
+                    exec.mfa()
+                        .insert_mfa_op_access_log(
+                            current_user_info.user_id,
+                            NewMfaAuthLog {
+                                user_id: current_user_info.user_id,
+                                op_type: MFAOpType::Auth,
+                                info: NewMfaAuthLogInfo {
+                                    auth_method: MFAAuthMethod::Webauthn,
+                                    is_success: false,
+                                    ip_address: client_info.ip_address,
+                                    user_agent: client_info.user_agent,
+                                    credential_id: None,
+                                    error_message: Some(format!("{}", e)),
+                                },
+                            },
+                        )
+                        .await
+                        .map_err(|e| internal!(e, "Failed to insert MFA log"))?;
+                    return Err(bad_request!(e, "Failed to finish passkey authentication"));
+                }
+            }
+            Ok(())
+        })
+        .await?;
     session
         .sign_mfa()
         .map_err(|e| internal!(e, "Failed to sign MFA session"))?;
@@ -410,10 +449,12 @@ pub async fn webauthn_list(
     if q.user_id != current_user_info.user_id && current_user.role != Role::Admin {
         return Err(bad_request!("Cannot list TOTP for other users"));
     }
-    let list = state
+    // TODO: RustRover cannot infer the type here, so fxxk u jetbrains!
+    let list: Vec<WebauthnCredentialInfo> = state
         .db
-        .mfa()
-        .list_user_webauthn_credentials(q.user_id)
+        .single(async |mut exec: EchoDatabaseExecutor<'_>| {
+            exec.mfa().list_user_webauthn_credentials(q.user_id).await
+        })
         .await
         .map_err(|e| internal!(e, "Failed to list passkeys"))?
         .into_iter()
@@ -444,27 +485,30 @@ pub async fn webauthn_delete(
         .get_user_by_user_id(current_user_info.user_id)
         .await
         .map_err(|e| internal!(e, "Failed to fetch user"))?;
-    let cred = state
+    state
         .db
-        .mfa()
-        .get_webauthn_credential_by_id(q.credential_id)
-        .await
-        .map_err(|e| internal!(e, "Failed to query passkey"))?;
-    if let Some(cred) = cred {
-        if cred.user_id != current_user_info.user_id && current_user.role != Role::Admin {
-            return Err(bad_request!("Cannot delete others' passkey"));
-        }
-        state
-            .db
-            .mfa()
-            .delete_webauthn_credential(
-                q.credential_id,
-                client_info.ip_address,
-                client_info.user_agent,
-            )
-            .await
-            .map_err(|e| internal!(e, "Failed to delete passkey"))?;
-    }
+        .transaction(async |mut exec: EchoDatabaseExecutor<'_>| {
+            let cred = exec
+                .mfa()
+                .get_webauthn_credential_by_id(q.credential_id)
+                .await
+                .map_err(|e| internal!(e, "Failed to query passkey"))?;
+            if let Some(cred) = cred {
+                if cred.user_id != current_user_info.user_id && current_user.role != Role::Admin {
+                    return Err(bad_request!("Cannot delete others' passkey"));
+                }
+                exec.mfa()
+                    .delete_webauthn_credential(
+                        q.credential_id,
+                        client_info.ip_address,
+                        client_info.user_agent,
+                    )
+                    .await
+                    .map_err(|e| internal!(e, "Failed to delete passkey"))?;
+            }
+            Ok(())
+        })
+        .await?;
     Ok(general_json_res!("Passkey deleted"))
 }
 
@@ -486,21 +530,23 @@ pub async fn get_mfa_infos(
     if current_user.role != Role::Admin && req.user_ids.as_slice() != [current_user_info.user_id] {
         return Err(bad_request!("Cannot get MFA info for other users"));
     }
-    if let Some(id) = state
-        .db
-        .users()
-        .check_user_exists(&req.user_ids)
-        .await
-        .map_err(|e| internal!(e, "Failed to check user exists"))?
-    {
-        return Err(bad_request!(format!("User ID {} not exists!", id)));
-    }
     let res = state
         .db
-        .mfa()
-        .get_mfa_infos(&req.user_ids)
-        .await
-        .map_err(|e| internal!(e, "Failed to get MFA info"))?;
+        .transaction(async |mut exec: EchoDatabaseExecutor<'_>| {
+            if let Some(id) = exec
+                .users()
+                .check_user_exists(&req.user_ids)
+                .await
+                .map_err(|e| internal!(e, "Failed to check user exists"))?
+            {
+                return Err(bad_request!(format!("User ID {} not exists!", id)));
+            }
+            exec.mfa()
+                .get_mfa_infos(&req.user_ids)
+                .await
+                .map_err(|e| internal!(e, "Failed to get MFA info"))
+        })
+        .await?;
     Ok(general_json_res!("OK", res))
 }
 
@@ -523,9 +569,13 @@ pub async fn get_mfa_op_logs(
     if current_user.role != Role::Admin {
         return Err(bad_request!("Only admin can view MFA operation logs"));
     }
-    let repo = state.db.mfa();
-    let list = repo
-        .get_mfa_op_logs_page(current_user_info.user_id, req.page_query)
+    let list = state
+        .db
+        .single(async |mut exec: EchoDatabaseExecutor<'_>| {
+            exec.mfa()
+                .get_mfa_op_logs_page(current_user_info.user_id, req.page_query)
+                .await
+        })
         .await
         .map_err(|e| internal!(&e, "Failed to get MFA operation logs!"))?;
     Ok(general_json_res!("OK", list))

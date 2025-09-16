@@ -3,11 +3,10 @@ use crate::models::dyn_setting::{
 };
 use crate::services::hybrid_cache::{HybridCacheError, HybridCacheResult};
 use crate::services::states::EchoState;
-use crate::services::states::db::DataBaseError;
+use crate::services::states::db::{DataBaseError, EchoDatabaseExecutor};
 use crate::utils::smart_to_string::SerdeToString;
 use ahash::{HashMap, HashMapExt};
 use scc::HashCache;
-use sqlx::{Executor, Sqlite};
 use std::backtrace::Backtrace;
 use std::borrow::Cow;
 use std::sync::Arc;
@@ -25,25 +24,19 @@ impl HybridDynCache {
         }
     }
 
-    pub async fn get_inner<'c, K, E>(
+    pub async fn get_inner<K>(
         &self,
         key: K,
-        executor: E,
+        exec: &mut EchoDatabaseExecutor<'_>,
     ) -> HybridCacheResult<DynSettingsValue<'static>>
     where
         K: Into<Cow<'static, str>>,
-        E: Executor<'c, Database = Sqlite>,
     {
         let key_cow = key.into();
         if let Some(val) = self.cache.get_async(key_cow.as_ref()).await {
             return Ok(val.get().clone());
         }
-        let db_row = self
-            .state
-            .db
-            .dyn_settings()
-            .get_inner(key_cow.clone(), executor)
-            .await?;
+        let db_row = exec.dyn_settings().get_inner(key_cow.clone()).await?;
         let ori_const_val = DynSettingCollector::original_kv_map()
             .get(key_cow.as_ref())
             .ok_or(HybridCacheError::ItemNotFound)?;
@@ -62,11 +55,12 @@ impl HybridDynCache {
     pub async fn get_with_dyn<T>(
         &self,
         key: T,
+        exec: &mut EchoDatabaseExecutor<'_>,
     ) -> HybridCacheResult<DynSettingsBindValue<'_, T::Value>>
     where
-        T: DynSetting,
+        T: DynSetting + Send + Sync,
     {
-        let kv = self.get_inner(key.key(), self.state.db.pool()).await?;
+        let kv = self.get_inner(key.key(), exec).await?;
         let parsed = key
             .parse(&kv.val)
             .map_err(|e| DataBaseError::DynSettingParse {
@@ -80,79 +74,63 @@ impl HybridDynCache {
         })
     }
 
-    pub async fn get_with_dyn_tx<'c, T, E>(
+    pub async fn get_with_str<K>(
         &self,
-        key: T,
-        executor: E,
-    ) -> HybridCacheResult<DynSettingsBindValue<'_, T::Value>>
-    where
-        T: DynSetting,
-        E: Executor<'c, Database = Sqlite>,
-    {
-        let key_str = key.key();
-        let kv = self.get_inner(key_str, executor).await?;
-        let parsed = key.parse(&kv.val).map_err(|e| {
-            HybridCacheError::DatabaseError(DataBaseError::DynSettingParse {
-                err: e,
-                backtrace: Backtrace::capture(),
-            })
-        })?;
-        Ok(DynSettingsBindValue {
-            val: parsed,
-            description: kv.description,
-            side_effects: kv.side_effects,
-        })
-    }
-
-    pub async fn get_with_str<K>(&self, key: K) -> HybridCacheResult<DynSettingsValue<'static>>
+        key: K,
+        exec: &mut EchoDatabaseExecutor<'_>,
+    ) -> HybridCacheResult<DynSettingsValue<'static>>
     where
         K: Into<Cow<'static, str>>,
     {
-        self.get_inner(key, self.state.db.pool()).await
+        self.get_inner(key, exec).await
     }
 
     pub async fn get_all_kvs(&self) -> HybridCacheResult<DynSettingsKvMap<'static>> {
-        let mut tx = self
+        let ori_map = DynSettingCollector::original_kv_map();
+        let res = self
             .state
             .db
-            .pool()
-            .begin()
-            .await
-            .map_err(|e| HybridCacheError::DatabaseError(DataBaseError::SqlxOther(e)))?;
-        let ori_map = DynSettingCollector::original_kv_map();
-        let mut res = HashMap::with_capacity(ori_map.len());
-        for &key in ori_map.keys() {
-            let val = self.get_inner(key, &mut *tx).await?;
-            res.insert(key, val);
-        }
-        tx.commit()
-            .await
-            .map_err(|e| HybridCacheError::DatabaseError(DataBaseError::SqlxOther(e)))?;
+            .transaction(async |mut exec: EchoDatabaseExecutor<'_>| {
+                let mut res = HashMap::with_capacity(ori_map.len());
+                for &key in ori_map.keys() {
+                    let val = self.get_inner(key, &mut exec).await?;
+                    res.insert(key, val);
+                }
+                Ok::<_, HybridCacheError>(res)
+            })
+            .await?;
         Ok(res)
     }
 
-    pub async fn set_inner<'c, K, E>(
+    pub async fn set_inner<'c, K>(
         &self,
         key: K,
         value: &str,
-        executor: E,
+        overwrite: bool,
     ) -> HybridCacheResult<()>
     where
         K: Into<Cow<'static, str>>,
-        E: Executor<'c, Database = Sqlite>,
     {
         let key_cow = key.into();
         let key_ref = key_cow.as_ref();
         self.state
             .db
-            .dyn_settings()
-            .set_inner(key_cow.clone(), value, executor)
+            .single(async |mut exec: EchoDatabaseExecutor<'_>| {
+                exec.dyn_settings()
+                    .set_inner(key_cow.clone(), value, overwrite)
+                    .await
+            })
             .await?;
         self.cache.remove_async(key_ref).await;
         Ok(())
     }
 
-    pub async fn set_with_dyn<T>(&self, key: T, value: &T::Value) -> HybridCacheResult<()>
+    pub async fn set_with_dyn<T>(
+        &self,
+        key: T,
+        value: &T::Value,
+        overwrite: bool,
+    ) -> HybridCacheResult<()>
     where
         T: DynSetting,
     {
@@ -163,45 +141,42 @@ impl HybridDynCache {
                 backtrace: Backtrace::capture(),
             })
         })?;
-        self.set_inner(key_str, &val_str, self.state.db.pool())
-            .await
+        self.set_inner(key_str, &val_str, overwrite).await
     }
 
-    pub async fn set_with_str(&self, key: &str, value: &str) -> HybridCacheResult<()> {
-        self.set_inner(key.to_owned(), value, self.state.db.pool())
-            .await
+    pub async fn set_with_str(
+        &self,
+        key: &str,
+        value: &str,
+        overwrite: bool,
+    ) -> HybridCacheResult<()> {
+        self.set_inner(key.to_owned(), value, overwrite).await
     }
 }
 
-// TODO: The current implementation is rather hacky and compromises encapsulation.
-// TODO: Consider refactoring using "transactions in closure"
 #[macro_export]
 macro_rules! get_batch_tuple {
     ($dyn_cache:expr, $($setting:expr),+ $(,)?) => {{
         async {
             use $crate::services::hybrid_cache::HybridCacheError;
-            use $crate::services::states::db::DataBaseError;
-            let mut tx = $dyn_cache
+            let res = $dyn_cache
                 .state
                 .db
-                .pool()
-                .begin()
-                .await
-                .map_err(|e| {
-                    HybridCacheError::DatabaseError(DataBaseError::SqlxOther(e))
-                })?;
-            let res = (
-                $(
-                    $dyn_cache.get_with_dyn_tx($setting, &mut *tx).await?.val,
-                )+
-            );
-            tx.commit()
-                .await
-                .map_err(|e| {
-                    HybridCacheError::DatabaseError(DataBaseError::SqlxOther(e))
-                })?;
+                .transaction(async |mut exec| {
+                    let out = (
+                        $(
+                            {
+                                let bind = $dyn_cache
+                                    .get_with_dyn($setting, &mut exec)
+                                    .await?;
+                                bind.val
+                            },
+                        )+
+                    );
+                    Ok::<_, HybridCacheError>(out)
+                })
+                .await?;
             Ok::<_, HybridCacheError>(res)
-        }
-        .await
+        }.await
     }};
 }

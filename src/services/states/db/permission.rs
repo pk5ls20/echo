@@ -4,32 +4,34 @@ use crate::services::states::db::{
     DataBaseResult, PageQueryBinder, PageQueryResult, SqliteBaseResultExt,
 };
 use ahash::HashSet;
-use sqlx::{SqlitePool, query, query_as};
+use sqlx::{Executor, Sqlite, query, query_as};
 use time::OffsetDateTime;
 
-pub struct PermissionRepo<'a> {
-    pool: &'a SqlitePool,
+pub struct PermissionRepo<'a, E>
+where
+    for<'c> &'c mut E: Executor<'c, Database = Sqlite>,
+{
+    pub inner: &'a mut E,
 }
 
-impl<'a> PermissionRepo<'a> {
-    pub fn new(pool: &'a SqlitePool) -> Self {
-        Self { pool }
-    }
-
-    pub async fn add_permission(&self, pm_desc: &str, pm_color: i64) -> DataBaseResult<()> {
+impl<'a, E> PermissionRepo<'a, E>
+where
+    for<'c> &'c mut E: Executor<'c, Database = Sqlite>,
+{
+    pub async fn add_permission(&mut self, pm_desc: &str, pm_color: i64) -> DataBaseResult<()> {
         query!(
             "INSERT INTO permissions (description, color) VALUES (?, ?)",
             pm_desc,
             pm_color,
         )
-        .execute(self.pool)
+        .execute(&mut *self.inner)
         .await
         .resolve()?;
         Ok(())
     }
 
     pub async fn modify_permission(
-        &self,
+        &mut self,
         pm_id: i64,
         pm_desc: &str,
         pm_color: i64,
@@ -40,28 +42,27 @@ impl<'a> PermissionRepo<'a> {
             pm_color,
             pm_id,
         )
-        .execute(self.pool)
+        .execute(&mut *self.inner)
         .await
         .resolve()?;
         Ok(())
     }
 
-    pub async fn delete_permission(&self, pm_id: i64) -> DataBaseResult<()> {
+    pub async fn delete_permission(&mut self, pm_id: i64) -> DataBaseResult<()> {
         query!("DELETE FROM permissions WHERE id = ?", pm_id,)
-            .execute(self.pool)
+            .execute(&mut *self.inner)
             .await
             .resolve()?;
         Ok(())
     }
 
     pub(in crate::services) async fn grant_user_permission(
-        &self,
+        &mut self,
         user_id: i64,
         assigner_id: i64,
         permission_ids: &[i64],
         exp_time: Option<OffsetDateTime>,
     ) -> DataBaseResult<()> {
-        let mut tx = self.pool.begin().await?;
         let exp_time_unix_timestamp = exp_time.map(|t| t.unix_timestamp());
         for &permission_id in permission_ids {
             query!(
@@ -74,16 +75,15 @@ impl<'a> PermissionRepo<'a> {
                 assigner_id,
                 exp_time_unix_timestamp
             )
-            .execute(&mut *tx)
+            .execute(&mut *self.inner)
             .await
             .resolve()?;
         }
-        tx.commit().await?;
         Ok(())
     }
 
     pub async fn combined_query_user_permission(
-        &self,
+        &mut self,
         user_id: i64,
         role: &Role,
     ) -> DataBaseResult<HashSet<Permission>> {
@@ -94,7 +94,7 @@ impl<'a> PermissionRepo<'a> {
     }
 
     async fn query_basic_user_owned_permission(
-        &self,
+        &mut self,
         user_id: i64,
     ) -> DataBaseResult<HashSet<Permission>> {
         let perms = query_as!(
@@ -110,22 +110,22 @@ impl<'a> PermissionRepo<'a> {
             "#,
             user_id
         )
-        .fetch_all(self.pool)
+        .fetch_all(&mut *self.inner)
         .await
         .resolve()?;
         Ok(perms.into_iter().collect())
     }
 
-    async fn list_all_permissions(&self) -> DataBaseResult<HashSet<Permission>> {
+    async fn list_all_permissions(&mut self) -> DataBaseResult<HashSet<Permission>> {
         let perms = query_as!(Permission, "SELECT id, description, color FROM permissions")
-            .fetch_all(self.pool)
+            .fetch_all(&mut *self.inner)
             .await
             .resolve()?;
         Ok(perms.into_iter().collect())
     }
 
     pub async fn get_permissions_record_page(
-        &self,
+        &mut self,
         page: PageQueryBinder,
     ) -> DataBaseResult<PageQueryResult<UserAssignedPermission>> {
         let PageQueryResult {
@@ -155,7 +155,7 @@ impl<'a> PermissionRepo<'a> {
                     pq.start_after,
                     pq.limit,
                 )
-                .fetch_all(self.pool)
+                .fetch_all(&mut *self.inner)
                 .await
             })
             .await?;
@@ -183,11 +183,10 @@ impl<'a> PermissionRepo<'a> {
     }
 
     pub(in crate::services) async fn revoke_permissions(
-        &self,
+        &mut self,
         user_id: i64,
         permission_ids: &[i64],
     ) -> DataBaseResult<()> {
-        let tx = self.pool.begin().await?;
         for &pid in permission_ids {
             query!(
                 r#"
@@ -198,11 +197,10 @@ impl<'a> PermissionRepo<'a> {
                 user_id,
                 pid
             )
-            .execute(self.pool)
+            .execute(&mut *self.inner)
             .await
             .resolve()?;
         }
-        tx.commit().await?;
         Ok(())
     }
 }

@@ -5,27 +5,22 @@ use crate::models::mfa::{
 use crate::services::states::db::{
     DataBaseResult, PageQueryBinder, PageQueryResult, SqliteBaseResultExt,
 };
-use sqlx::{Executor, Sqlite, SqlitePool, query, query_as, query_scalar};
+use sqlx::{Executor, Sqlite, query, query_as, query_scalar};
 use time::OffsetDateTime;
 use uuid::Uuid;
 
-pub struct MfaRepo<'a> {
-    pool: &'a SqlitePool,
+pub struct MfaRepo<'a, E>
+where
+    for<'c> &'c mut E: Executor<'c, Database = Sqlite>,
+{
+    pub inner: &'a mut E,
 }
 
-impl<'a> MfaRepo<'a> {
-    pub fn new(pool: &'a SqlitePool) -> Self {
-        Self { pool }
-    }
-
-    async fn insert_mfa_op_log_with_ctx<'c, E>(
-        &self,
-        executor: E,
-        log: NewMfaAuthLog,
-    ) -> DataBaseResult<i64>
-    where
-        E: Executor<'c, Database = Sqlite>,
-    {
+impl<'a, E> MfaRepo<'a, E>
+where
+    for<'c> &'c mut E: Executor<'c, Database = Sqlite>,
+{
+    async fn insert_mfa_op_log_with_ctx(&mut self, log: NewMfaAuthLog) -> DataBaseResult<i64> {
         query!(
             r#"
                 INSERT INTO mfa_op_logs
@@ -41,20 +36,13 @@ impl<'a> MfaRepo<'a> {
             log.info.credential_id,
             log.info.error_message
         )
-        .execute(executor)
+        .execute(&mut *self.inner)
         .await
         .resolve()
         .map(|result| result.last_insert_rowid())
     }
 
-    async fn get_mfa_info<'c, E>(
-        &self,
-        user_id: i64,
-        executor: E,
-    ) -> DataBaseResult<Option<MfaSettings>>
-    where
-        E: Executor<'c, Database = Sqlite>,
-    {
+    async fn get_mfa_info(&mut self, user_id: i64) -> DataBaseResult<Option<MfaSettings>> {
         query_as!(
             MfaSettings,
             r#"
@@ -67,12 +55,12 @@ impl<'a> MfaRepo<'a> {
             "#,
             user_id
         )
-        .fetch_optional(executor)
+        .fetch_optional(&mut *self.inner)
         .await
         .resolve()
     }
 
-    pub async fn is_mfa_enabled(&self, user_id: i64) -> DataBaseResult<bool> {
+    pub async fn mfa_enabled(&mut self, user_id: i64) -> DataBaseResult<bool> {
         query_scalar!(
             // language=sql
             r#"
@@ -82,13 +70,13 @@ impl<'a> MfaRepo<'a> {
             "#,
             user_id
         )
-        .fetch_optional(self.pool)
+        .fetch_optional(&mut *self.inner)
         .await
         .resolve()
         .map(|opt| opt.unwrap_or(false))
     }
 
-    pub async fn enable_mfa(&self, user_id: i64) -> DataBaseResult<()> {
+    pub async fn enable_mfa(&mut self, user_id: i64) -> DataBaseResult<()> {
         query!(
             // language=sql
             r#"
@@ -98,30 +86,27 @@ impl<'a> MfaRepo<'a> {
             "#,
             user_id
         )
-        .execute(self.pool)
+        .execute(&mut *self.inner)
         .await
         .resolve()?;
         Ok(())
     }
 
     pub async fn insert_mfa_op_access_log(
-        &self,
+        &mut self,
         user_id: i64,
         info: NewMfaAuthLog,
     ) -> DataBaseResult<i64> {
-        self.insert_mfa_op_log_with_ctx(
-            self.pool,
-            NewMfaAuthLog {
-                user_id,
-                op_type: info.op_type,
-                info: info.info,
-            },
-        )
+        self.insert_mfa_op_log_with_ctx(NewMfaAuthLog {
+            user_id,
+            op_type: info.op_type,
+            info: info.info,
+        })
         .await
     }
 
     pub async fn get_mfa_op_logs_page(
-        &self,
+        &mut self,
         user_id: i64,
         page: PageQueryBinder,
     ) -> DataBaseResult<PageQueryResult<MfaAuthLog>> {
@@ -151,89 +136,79 @@ impl<'a> MfaRepo<'a> {
                 pq.start_after,
                 pq.limit,
             )
-            .fetch_all(self.pool)
+            .fetch_all(&mut *self.inner)
             .await
         })
         .await
     }
 
     pub async fn insert_totp_credential(
-        &self,
+        &mut self,
         credential: NewTotpCredential,
         ip_address: Option<String>,
         user_agent: Option<String>,
     ) -> DataBaseResult<i64> {
-        let mut tx = self.pool.begin().await.resolve()?;
         let credential_id = query!(
             "INSERT INTO totp_credentials (user_id, totp_credential_data) VALUES (?, ?)",
             credential.user_id,
             credential.totp_credential_data
         )
-        .execute(&mut *tx)
+        .execute(&mut *self.inner)
         .await
         .resolve()?
         .last_insert_rowid();
-        self.insert_mfa_op_log_with_ctx(
-            &mut *tx,
-            NewMfaAuthLog {
-                user_id: credential.user_id,
-                op_type: MFAOpType::Add,
-                info: NewMfaAuthLogInfo {
-                    auth_method: MFAAuthMethod::Totp,
-                    is_success: true,
-                    ip_address,
-                    user_agent,
-                    credential_id: Some(credential_id),
-                    error_message: None,
-                },
+        self.insert_mfa_op_log_with_ctx(NewMfaAuthLog {
+            user_id: credential.user_id,
+            op_type: MFAOpType::Add,
+            info: NewMfaAuthLogInfo {
+                auth_method: MFAAuthMethod::Totp,
+                is_success: true,
+                ip_address,
+                user_agent,
+                credential_id: Some(credential_id),
+                error_message: None,
             },
-        )
+        })
         .await?;
-        tx.commit().await.resolve()?;
         Ok(credential_id)
     }
 
     pub async fn delete_totp_credential(
-        &self,
+        &mut self,
         user_id: i64,
         ip_address: Option<String>,
         user_agent: Option<String>,
     ) -> DataBaseResult<()> {
-        let mut tx = self.pool.begin().await.resolve()?;
         let credential_id = query_scalar!(
             // language=sql
             "SELECT id FROM totp_credentials WHERE user_id = ?",
             user_id
         )
-        .fetch_optional(&mut *tx)
+        .fetch_optional(&mut *self.inner)
         .await
         .resolve()?;
         query!("DELETE FROM totp_credentials WHERE user_id = ?", user_id)
-            .execute(&mut *tx)
+            .execute(&mut *self.inner)
             .await
             .resolve()?;
-        self.insert_mfa_op_log_with_ctx(
-            &mut *tx,
-            NewMfaAuthLog {
-                user_id,
-                op_type: MFAOpType::Delete,
-                info: NewMfaAuthLogInfo {
-                    auth_method: MFAAuthMethod::Totp,
-                    is_success: true,
-                    ip_address,
-                    user_agent,
-                    credential_id,
-                    error_message: None,
-                },
+        self.insert_mfa_op_log_with_ctx(NewMfaAuthLog {
+            user_id,
+            op_type: MFAOpType::Delete,
+            info: NewMfaAuthLogInfo {
+                auth_method: MFAAuthMethod::Totp,
+                is_success: true,
+                ip_address,
+                user_agent,
+                credential_id,
+                error_message: None,
             },
-        )
+        })
         .await?;
-        tx.commit().await.resolve()?;
         Ok(())
     }
 
     pub async fn list_user_totp_credential(
-        &self,
+        &mut self,
         user_id: i64,
     ) -> DataBaseResult<Option<TotpCredential>> {
         query_as!(
@@ -251,12 +226,12 @@ impl<'a> MfaRepo<'a> {
             "#,
             user_id
         )
-        .fetch_optional(self.pool)
+        .fetch_optional(&mut *self.inner)
         .await
         .resolve()
     }
 
-    pub async fn update_totp_last_used(&self, user_id: i64) -> DataBaseResult<()> {
+    pub async fn update_totp_last_used(&mut self, user_id: i64) -> DataBaseResult<()> {
         query!(
             r#"
                 UPDATE totp_credentials
@@ -266,19 +241,18 @@ impl<'a> MfaRepo<'a> {
             "#,
             user_id
         )
-        .execute(self.pool)
+        .execute(&mut *self.inner)
         .await
         .resolve()?;
         Ok(())
     }
 
     pub async fn insert_webauthn_credential(
-        &self,
+        &mut self,
         credential: NewWebauthnCredential,
         ip_address: Option<String>,
         user_agent: Option<String>,
     ) -> DataBaseResult<i64> {
-        let mut tx = self.pool.begin().await.resolve()?;
         let credential_id = query!(
             r#"
                 INSERT INTO webauthn_credentials
@@ -291,15 +265,51 @@ impl<'a> MfaRepo<'a> {
             credential.user_display_name,
             credential.credential_data
         )
-        .execute(&mut *tx)
+        .execute(&mut *self.inner)
         .await
         .resolve()?
         .last_insert_rowid();
-        self.insert_mfa_op_log_with_ctx(
-            &mut *tx,
-            NewMfaAuthLog {
-                user_id: credential.user_id,
-                op_type: MFAOpType::Add,
+        self.insert_mfa_op_log_with_ctx(NewMfaAuthLog {
+            user_id: credential.user_id,
+            op_type: MFAOpType::Add,
+            info: NewMfaAuthLogInfo {
+                auth_method: MFAAuthMethod::Webauthn,
+                is_success: true,
+                ip_address,
+                user_agent,
+                credential_id: Some(credential_id),
+                error_message: None,
+            },
+        })
+        .await?;
+        Ok(credential_id)
+    }
+
+    pub async fn delete_webauthn_credential(
+        &mut self,
+        credential_id: i64,
+        ip_address: Option<String>,
+        user_agent: Option<String>,
+    ) -> DataBaseResult<()> {
+        let user_id = query_scalar!(
+            // language=sql
+            "SELECT user_id FROM webauthn_credentials WHERE id = ?",
+            credential_id
+        )
+        .fetch_optional(&mut *self.inner)
+        .await
+        .resolve()?;
+        if let Some(user_id) = user_id {
+            query!(
+                "DELETE FROM webauthn_credentials WHERE id = ?",
+                credential_id
+            )
+            .execute(&mut *self.inner)
+            .await
+            .resolve()?;
+            self.insert_mfa_op_log_with_ctx(NewMfaAuthLog {
+                user_id,
+                op_type: MFAOpType::Delete,
                 info: NewMfaAuthLogInfo {
                     auth_method: MFAAuthMethod::Webauthn,
                     is_success: true,
@@ -308,59 +318,14 @@ impl<'a> MfaRepo<'a> {
                     credential_id: Some(credential_id),
                     error_message: None,
                 },
-            },
-        )
-        .await?;
-        tx.commit().await.resolve()?;
-        Ok(credential_id)
-    }
-
-    pub async fn delete_webauthn_credential(
-        &self,
-        credential_id: i64,
-        ip_address: Option<String>,
-        user_agent: Option<String>,
-    ) -> DataBaseResult<()> {
-        let mut tx = self.pool.begin().await.resolve()?;
-        let user_id = query_scalar!(
-            // language=sql
-            "SELECT user_id FROM webauthn_credentials WHERE id = ?",
-            credential_id
-        )
-        .fetch_optional(&mut *tx)
-        .await
-        .resolve()?;
-        if let Some(user_id) = user_id {
-            query!(
-                "DELETE FROM webauthn_credentials WHERE id = ?",
-                credential_id
-            )
-            .execute(&mut *tx)
-            .await
-            .resolve()?;
-            self.insert_mfa_op_log_with_ctx(
-                &mut *tx,
-                NewMfaAuthLog {
-                    user_id,
-                    op_type: MFAOpType::Delete,
-                    info: NewMfaAuthLogInfo {
-                        auth_method: MFAAuthMethod::Webauthn,
-                        is_success: true,
-                        ip_address,
-                        user_agent,
-                        credential_id: Some(credential_id),
-                        error_message: None,
-                    },
-                },
-            )
+            })
             .await?;
         }
-        tx.commit().await.resolve()?;
         Ok(())
     }
 
     pub async fn list_user_webauthn_credentials(
-        &self,
+        &mut self,
         user_id: i64,
     ) -> DataBaseResult<Vec<WebauthnCredential>> {
         query_as!(
@@ -382,13 +347,13 @@ impl<'a> MfaRepo<'a> {
             "#,
             user_id
         )
-        .fetch_all(self.pool)
+        .fetch_all(&mut *self.inner)
         .await
         .resolve()
     }
 
     pub async fn get_webauthn_credential_by_id(
-        &self,
+        &mut self,
         credential_id: i64,
     ) -> DataBaseResult<Option<WebauthnCredential>> {
         query_as!(
@@ -409,12 +374,12 @@ impl<'a> MfaRepo<'a> {
             "#,
             credential_id
         )
-        .fetch_optional(self.pool)
+        .fetch_optional(&mut *self.inner)
         .await
         .resolve()
     }
 
-    pub async fn update_webauthn_last_used(&self, credential_id: i64) -> DataBaseResult<()> {
+    pub async fn update_webauthn_last_used(&mut self, credential_id: i64) -> DataBaseResult<()> {
         query!(
             r#"
                 UPDATE webauthn_credentials
@@ -424,26 +389,22 @@ impl<'a> MfaRepo<'a> {
             "#,
             credential_id
         )
-        .execute(self.pool)
+        .execute(&mut *self.inner)
         .await
         .resolve()?;
         Ok(())
     }
 
-    async fn list_user_available_methods<E>(
-        &self,
+    async fn list_user_available_methods(
+        &mut self,
         user_id: i64,
-        executor: &mut E,
-    ) -> DataBaseResult<Vec<MFAAuthMethod>>
-    where
-        for<'e> &'e mut E: Executor<'e, Database = Sqlite>,
-    {
+    ) -> DataBaseResult<Vec<MFAAuthMethod>> {
         let totp_count = query_scalar!(
             // language=sql
             "SELECT COUNT(1) FROM totp_credentials WHERE user_id = ?",
             user_id
         )
-        .fetch_one(&mut *executor)
+        .fetch_one(&mut *self.inner)
         .await
         .resolve()?;
         let webauthn_count = query_scalar!(
@@ -451,7 +412,7 @@ impl<'a> MfaRepo<'a> {
             "SELECT COUNT(1) FROM webauthn_credentials WHERE user_id = ?",
             user_id
         )
-        .fetch_one(&mut *executor)
+        .fetch_one(&mut *self.inner)
         .await
         .resolve()?;
         let mut methods = Vec::with_capacity(2);
@@ -464,12 +425,11 @@ impl<'a> MfaRepo<'a> {
         Ok(methods)
     }
 
-    pub async fn get_mfa_infos(&self, user_ids: &[i64]) -> DataBaseResult<Vec<MfaInfo>> {
-        let mut tx = self.pool.begin().await?;
+    pub async fn get_mfa_infos(&mut self, user_ids: &[i64]) -> DataBaseResult<Vec<MfaInfo>> {
         let mut res = Vec::with_capacity(user_ids.len());
         for &user_id in user_ids {
-            let settings = self.get_mfa_info(user_id, &mut *tx).await?;
-            let available_methods = self.list_user_available_methods(user_id, &mut *tx).await?;
+            let settings = self.get_mfa_info(user_id).await?;
+            let available_methods = self.list_user_available_methods(user_id).await?;
             let mfa_info = match settings {
                 Some(s) => MfaInfo {
                     user_id: s.user_id,

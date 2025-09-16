@@ -59,6 +59,13 @@ impl ApiError {
     }
 }
 
+impl From<DataBaseError> for ApiError {
+    //noinspection ALL: so fxxk u rustrover!
+    fn from(e: DataBaseError) -> Self {
+        internal!(e, "Database error")
+    }
+}
+
 macro_rules! define_api_error {
     ($fn_name:ident, $http_status:expr, $fallback_msg:expr) => {
         impl ApiError {
@@ -120,6 +127,7 @@ macro_rules! general_json_res {
     };
 }
 
+use crate::services::states::db::DataBaseError;
 pub(crate) use general_json_res;
 
 impl IntoResponse for ApiError {

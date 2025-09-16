@@ -4,7 +4,7 @@ use crate::models::session::BasicAuthData;
 use crate::models::users::Role;
 use crate::services::hybrid_cache::HybridCacheService;
 use crate::services::states::EchoState;
-use crate::services::states::db::{PageQueryBinder, PageQueryResult};
+use crate::services::states::db::{EchoDatabaseExecutor, PageQueryBinder, PageQueryResult};
 use axum::Json;
 use axum::extract::State;
 use rand::Rng;
@@ -55,8 +55,11 @@ pub async fn create_invite_code(
         .collect::<String>();
     let id = state
         .db
-        .invite_code()
-        .insert_invite_code(&code, current_user_info.user_id, exp_unix)
+        .single(async |mut exec: EchoDatabaseExecutor<'_>| {
+            exec.invite_code()
+                .insert_invite_code(&code, current_user_info.user_id, exp_unix)
+                .await
+        })
         .await
         .map_err(|e| internal!(e, "Failed to create invitation code"))?;
     Ok(general_json_res!(
@@ -84,9 +87,13 @@ pub async fn list_invite_codes(
     if current_user.role != Role::Admin {
         return Err(bad_request!("You are not allowed to list invitation codes"));
     }
-    let repo = state.db.invite_code();
-    let page = repo
-        .list_invite_codes_page(req.page_query)
+    let page = state
+        .db
+        .transaction(async |mut exec: EchoDatabaseExecutor<'_>| {
+            exec.invite_code()
+                .list_invite_codes_page(req.page_query)
+                .await
+        })
         .await
         .map_err(|e| internal!(e, "Failed to fetch invitation codes"))?;
     Ok(general_json_res!("Invitation codes fetched", page))
@@ -119,9 +126,10 @@ pub async fn revoke_invite_code(
         .collect::<Vec<_>>();
     state
         .db
-        .invite_code()
-        .revoke_invite_code(&issuer)
+        .transaction(async |mut exec: EchoDatabaseExecutor<'_>| {
+            exec.invite_code().revoke_invite_code(&issuer).await
+        })
         .await
-        .map_err(|e| internal!(e, "Failed to invalidate invitation code"))?;
+        .map_err(|e| internal!(e, "Failed to invalidate invitation codes"))?;
     Ok(general_json_res!("Invitation code invalidated"))
 }

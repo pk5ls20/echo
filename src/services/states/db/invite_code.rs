@@ -2,19 +2,21 @@ use crate::models::invite_code::InviteCodeRaw;
 use crate::services::states::db::{
     DataBaseResult, PageQueryBinder, PageQueryResult, SqliteBaseResultExt, SqliteQueryResultExt,
 };
-use sqlx::{SqlitePool, query, query_as};
+use sqlx::{Executor, Sqlite, query, query_as};
 
-pub struct InviteCodeRepo<'a> {
-    pool: &'a SqlitePool,
+pub struct InviteCodeRepo<'a, E>
+where
+    for<'c> &'c mut E: Executor<'c, Database = Sqlite>,
+{
+    pub inner: &'a mut E,
 }
 
-impl<'a> InviteCodeRepo<'a> {
-    pub fn new(pool: &'a SqlitePool) -> Self {
-        Self { pool }
-    }
-
+impl<'a, E> InviteCodeRepo<'a, E>
+where
+    for<'c> &'c mut E: Executor<'c, Database = Sqlite>,
+{
     pub async fn insert_invite_code(
-        &self,
+        &mut self,
         code: &str,
         issued_by_user_id: i64,
         exp_time: i64,
@@ -28,13 +30,16 @@ impl<'a> InviteCodeRepo<'a> {
             issued_by_user_id,
             exp_time
         )
-        .execute(self.pool)
+        .execute(&mut *self.inner)
         .await
         .resolve()?;
         Ok(res.last_insert_rowid())
     }
 
-    pub async fn get_invite_code_by_code<T>(&self, code: T) -> DataBaseResult<Option<InviteCodeRaw>>
+    pub async fn get_invite_code_by_code<T>(
+        &mut self,
+        code: T,
+    ) -> DataBaseResult<Option<InviteCodeRaw>>
     where
         T: AsRef<str>,
     {
@@ -56,17 +61,16 @@ impl<'a> InviteCodeRepo<'a> {
             "#,
             code
         )
-        .fetch_optional(self.pool)
+        .fetch_optional(&mut *self.inner)
         .await
         .resolve()?;
         Ok(res)
     }
 
-    pub async fn revoke_invite_code<T>(&self, issuer: &[(T, i64)]) -> DataBaseResult<()>
+    pub async fn revoke_invite_code<T>(&mut self, issuer: &[(T, i64)]) -> DataBaseResult<()>
     where
         T: AsRef<str>,
     {
-        let mut tx = self.pool.begin().await.resolve()?;
         for (code, user_id) in issuer {
             let code = code.as_ref();
             query!(
@@ -78,16 +82,15 @@ impl<'a> InviteCodeRepo<'a> {
                 user_id,
                 code
             )
-            .execute(&mut *tx)
+            .execute(&mut *self.inner)
             .await
             .resolve_affected()?;
         }
-        tx.commit().await.resolve()?;
         Ok(())
     }
 
     pub async fn list_invite_codes_page(
-        &self,
+        &mut self,
         page: PageQueryBinder,
     ) -> DataBaseResult<PageQueryResult<InviteCodeRaw>> {
         page.query_page_ctx(|pq| async move {
@@ -111,7 +114,7 @@ impl<'a> InviteCodeRepo<'a> {
                 pq.start_after,
                 pq.limit,
             )
-            .fetch_all(self.pool)
+            .fetch_all(&mut *self.inner)
             .await
         })
         .await

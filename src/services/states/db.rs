@@ -7,22 +7,23 @@ mod resources;
 mod token;
 mod users;
 
-use crate::services::states::db::dyn_setting::DynSettingRepo;
+use crate::services::states::db::dyn_setting::DynSettingsRepo;
 use crate::services::states::db::echo::EchoRepo;
 use crate::services::states::db::invite_code::InviteCodeRepo;
 use crate::services::states::db::mfa::MfaRepo;
 use crate::services::states::db::permission::PermissionRepo;
 use crate::services::states::db::resources::ResourceRepo;
 use crate::services::states::db::token::TokenRepo;
-use crate::services::states::db::users::UserRepo;
+use crate::services::states::db::users::UsersRepo;
 use crate::utils::smart_to_string::SmartStringError;
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use serde_inline_default::serde_inline_default;
-use sqlx::SqlitePool;
 use sqlx::sqlite::SqliteQueryResult;
+use sqlx::{Acquire, Executor, Pool, Sqlite, SqliteConnection, SqlitePool};
 use std::backtrace::Backtrace;
 use std::fmt::Debug;
+use std::sync::Arc;
 
 #[derive(Debug, thiserror::Error)]
 pub enum DataBaseError {
@@ -101,7 +102,7 @@ impl PageQueryBinder {
     where
         T: PageQueryCursor,
         F: FnOnce(PageQueryInner) -> Fut,
-        Fut: Future<Output = Result<Vec<T>, sqlx::Error>> + Send,
+        Fut: Future<Output = Result<Vec<T>, sqlx::Error>>,
     {
         let limit = self.page_size + 1;
         let inner = PageQueryInner {
@@ -175,49 +176,124 @@ impl SqliteQueryResultExt for Result<SqliteQueryResult, sqlx::Error> {
 
 pub type DataBaseResult<T> = Result<T, DataBaseError>;
 
+pub struct DataBaseExecutor<'a, E>
+where
+    for<'c> &'c mut E: Executor<'c, Database = Sqlite>,
+{
+    inner: &'a mut E,
+}
+
+impl<'a, E> DataBaseExecutor<'a, E>
+where
+    for<'c> &'c mut E: Executor<'c, Database = Sqlite>,
+{
+    #[inline]
+    pub fn dyn_settings(&mut self) -> DynSettingsRepo<'_, E> {
+        DynSettingsRepo {
+            inner: &mut *self.inner,
+        }
+    }
+
+    #[inline]
+    pub fn echo(&mut self) -> EchoRepo<'_, E> {
+        EchoRepo {
+            inner: &mut *self.inner,
+        }
+    }
+
+    #[inline]
+    pub fn invite_code(&mut self) -> InviteCodeRepo<'_, E> {
+        InviteCodeRepo {
+            inner: &mut *self.inner,
+        }
+    }
+
+    #[inline]
+    pub fn mfa(&mut self) -> MfaRepo<'_, E> {
+        MfaRepo {
+            inner: &mut *self.inner,
+        }
+    }
+
+    #[inline]
+    pub fn permission(&mut self) -> PermissionRepo<'_, E> {
+        PermissionRepo {
+            inner: &mut *self.inner,
+        }
+    }
+
+    #[inline]
+    pub fn resources(&mut self) -> ResourceRepo<'_, E> {
+        ResourceRepo {
+            inner: &mut *self.inner,
+        }
+    }
+
+    #[inline]
+    pub fn token(&mut self) -> TokenRepo<'_, E> {
+        TokenRepo {
+            inner: &mut *self.inner,
+        }
+    }
+
+    #[inline]
+    pub fn users(&mut self) -> UsersRepo<'_, E> {
+        UsersRepo {
+            inner: &mut *self.inner,
+        }
+    }
+}
+
+pub type EchoDatabaseExecutor<'a> = DataBaseExecutor<'a, SqliteConnection>;
+
+#[derive(Clone)]
 pub struct DataBaseState {
-    pool: SqlitePool,
+    pool: Arc<Pool<Sqlite>>,
+}
+
+// TODO: RustRover currently cannot infer the parameter types of asynchronous closure functions
+// TODO: we must manually annotate them. So fxxk you, JetBrains!
+// ref: https://youtrack.jetbrains.com/issue/RUST-18759
+impl DataBaseState {
+    pub async fn single<F, R, E>(&self, f: F) -> Result<R, E>
+    where
+        for<'q> F: AsyncFnOnce(EchoDatabaseExecutor<'q>) -> Result<R, E> + Send,
+        R: Send,
+        E: Send + From<DataBaseError>,
+    {
+        let mut conn = self.pool.acquire().await.resolve()?;
+        let exec = DataBaseExecutor { inner: &mut *conn };
+        f(exec).await
+    }
+
+    pub async fn transaction<F, R, E>(&self, f: F) -> Result<R, E>
+    where
+        for<'q> F: AsyncFnOnce(EchoDatabaseExecutor<'q>) -> Result<R, E> + Send,
+        R: Send,
+        E: Send + From<DataBaseError>,
+    {
+        let mut conn = self.pool.acquire().await.resolve()?;
+        let mut tx = conn.begin().await.resolve()?;
+        let exec = DataBaseExecutor { inner: &mut *tx };
+        let out = f(exec).await;
+        match out {
+            Ok(val) => {
+                tx.commit().await.resolve()?;
+                Ok(val)
+            }
+            Err(err) => {
+                tx.rollback().await.resolve()?;
+                Err(err)
+            }
+        }
+    }
 }
 
 impl DataBaseState {
     pub fn new(pool: SqlitePool) -> Self {
-        Self { pool }
-    }
-
-    pub fn pool(&self) -> &SqlitePool {
-        &self.pool
-    }
-
-    pub fn users(&self) -> UserRepo<'_> {
-        UserRepo::new(&self.pool)
-    }
-
-    pub fn echos(&self) -> EchoRepo<'_> {
-        EchoRepo::new(&self.pool)
-    }
-
-    pub fn resources(&self) -> ResourceRepo<'_> {
-        ResourceRepo::new(&self.pool)
-    }
-
-    pub fn permissions(&self) -> PermissionRepo<'_> {
-        PermissionRepo::new(&self.pool)
-    }
-
-    pub fn tokens(&self) -> TokenRepo<'_> {
-        TokenRepo::new(&self.pool)
-    }
-
-    pub fn invite_code(&self) -> InviteCodeRepo<'_> {
-        InviteCodeRepo::new(&self.pool)
-    }
-
-    pub fn dyn_settings(&self) -> DynSettingRepo<'_> {
-        DynSettingRepo::new(&self.pool)
-    }
-
-    pub fn mfa(&self) -> MfaRepo<'_> {
-        MfaRepo::new(&self.pool)
+        Self {
+            pool: Arc::new(pool),
+        }
     }
 
     pub async fn close_conn(&self) {

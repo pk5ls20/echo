@@ -4,7 +4,7 @@ use crate::models::session::BasicAuthData;
 use crate::models::users::Role;
 use crate::services::hybrid_cache::HybridCacheService;
 use crate::services::states::EchoState;
-use crate::services::states::db::{PageQueryBinder, PageQueryResult};
+use crate::services::states::db::{EchoDatabaseExecutor, PageQueryBinder, PageQueryResult};
 use ahash::HashSet;
 use axum::Json;
 use axum::extract::State;
@@ -32,8 +32,11 @@ pub async fn add_permission(
     }
     state
         .db
-        .permissions()
-        .add_permission(&req.description, req.color)
+        .single(async |mut exec: EchoDatabaseExecutor<'_>| {
+            exec.permission()
+                .add_permission(&req.description, req.color)
+                .await
+        })
         .await
         .map_err(|e| bad_request!(e, "Failed to add permission"))?;
     Ok(general_json_res!("Permission added"))
@@ -57,8 +60,11 @@ pub async fn modify_permission(
     }
     state
         .db
-        .permissions()
-        .modify_permission(req.id, &req.description, req.color)
+        .single(async |mut exec: EchoDatabaseExecutor<'_>| {
+            exec.permission()
+                .modify_permission(req.id, &req.description, req.color)
+                .await
+        })
         .await
         .map_err(|e| bad_request!(e, "Failed to modify permission"))?;
     Ok(general_json_res!("Permission modified"))
@@ -79,8 +85,9 @@ pub async fn delete_permission(
     }
     state
         .db
-        .permissions()
-        .delete_permission(req.id)
+        .single(async |mut exec: EchoDatabaseExecutor<'_>| {
+            exec.permission().delete_permission(req.id).await
+        })
         .await
         .map_err(|e| bad_request!(e, "Failed to delete permission"))?;
     Ok(general_json_res!("Permission deleted"))
@@ -130,9 +137,13 @@ pub async fn get_permission_info(
         .get_user_by_user_id(current_user_info.user_id)
         .await
         .map_err(|e| internal!(e, "Failed to fetch user"))?;
-    let pm = state.db.permissions();
-    let permissions = pm
-        .combined_query_user_permission(current_user_info.user_id, &current_user.role)
+    let permissions = state
+        .db
+        .transaction(async |mut exec: EchoDatabaseExecutor<'_>| {
+            exec.permission()
+                .combined_query_user_permission(current_user_info.user_id, &current_user.role)
+                .await
+        })
         .await
         .map_err(|e| bad_request!(e, "Failed to get permissions"))?;
     Ok(general_json_res!(
@@ -189,8 +200,11 @@ pub async fn get_permission_records(
     }
     let records = state
         .db
-        .permissions()
-        .get_permissions_record_page(req.page_query)
+        .single(async |mut exec: EchoDatabaseExecutor<'_>| {
+            exec.permission()
+                .get_permissions_record_page(req.page_query)
+                .await
+        })
         .await
         .map_err(|e| bad_request!(e, "Failed to query permission records"))?;
     Ok(general_json_res!(

@@ -3,10 +3,10 @@ use crate::layers::session::SessionHelper;
 use crate::models::api::prelude::*;
 use crate::models::dyn_setting::{AllowRegister, RegisterNeedInvitationCode};
 use crate::models::session::BasicAuthData;
-use crate::models::users::{Role, User, UserRowOptional};
+use crate::models::users::{Role, User, UserInternal, UserRowOptional};
 use crate::services::hybrid_cache::HybridCacheService;
 use crate::services::states::EchoState;
-use crate::services::states::db::DataBaseError;
+use crate::services::states::db::{DataBaseError, EchoDatabaseExecutor};
 use axum::Json;
 use axum::extract::{Query, State};
 use serde::{Deserialize, Serialize};
@@ -30,56 +30,64 @@ pub async fn user_register(
     State((state, cache)): UserRouterState,
     Json(req): Json<UserRegisterReq>,
 ) -> ApiResult<Json<GeneralResponse<UserRegisterRes>>> {
-    let (user_op, invite_op) = (state.db.users(), state.db.invite_code());
     let (allow_reg, reg_need_invite) = get_batch_tuple!(
         cache.dyn_settings,
         AllowRegister,
         RegisterNeedInvitationCode
     )
     .map_err(|e| internal!(e, "Failed to get dynamic settings"))?;
-    let user_count = user_op
-        .get_user_count()
-        .await
-        .map_err(|e| internal!(e, "Failed to get user count"))?;
-    let (permission, brand_new_server) = match user_count {
-        0 => (Role::Admin, true),
-        _ => (Role::User, false),
-    };
-    if !(allow_reg || brand_new_server) {
-        return Err(bad_request!("User registration is not allowed"));
-    }
-    match (reg_need_invite, &req.invitation_code, brand_new_server) {
-        (true, Some(code), false) => {
-            let code = invite_op
-                .get_invite_code_by_code(&code)
+    let registered_user_id = state
+        .db
+        .transaction(async |mut exec: EchoDatabaseExecutor<'_>| {
+            let user_count = exec
+                .users()
+                .get_user_count()
                 .await
-                .map_err(|e| internal!(e, "Failed to query invitation code from database"))?
-                .ok_or(bad_request!("Cannot find this invitation code"))?;
-            if !code.is_valid() {
-                return Err(bad_request!("This invitation code is not valid"));
+                .map_err(|e| internal!(e, "Failed to get user count"))?;
+            let (permission, brand_new_server) = match user_count {
+                0 => (Role::Admin, true),
+                _ => (Role::User, false),
+            };
+            if !(allow_reg || brand_new_server) {
+                return Err(bad_request!("User registration is not allowed"));
             }
-        }
-        (true, None, false) => {
-            return Err(bad_request!("Invitation code is required for registration"));
-        }
-        _ => {}
-    }
-    let registered_user_id = user_op
-        .add_user(&req.username, &req.password_hash, permission)
-        .await
-        .map_err(|e| match e {
-            DataBaseError::UniqueViolation { .. } => conflict!("Username already exists!"),
-            _ => internal!(e, "Failed to register user"),
-        })?;
-    if let Some(code) = req.invitation_code
-        && reg_need_invite
-        && !brand_new_server
-    {
-        invite_op
-            .revoke_invite_code(&[(code, registered_user_id)])
-            .await
-            .map_err(|e| internal!(e, "Failed to use invitation code!"))?;
-    }
+            match (reg_need_invite, &req.invitation_code, brand_new_server) {
+                (true, Some(code), false) => {
+                    let code = exec
+                        .invite_code()
+                        .get_invite_code_by_code(&code)
+                        .await
+                        .map_err(|e| internal!(e, "Failed to query invitation code from database"))?
+                        .ok_or(bad_request!("Cannot find this invitation code"))?;
+                    if !code.is_valid() {
+                        return Err(bad_request!("This invitation code is not valid"));
+                    }
+                }
+                (true, None, false) => {
+                    return Err(bad_request!("Invitation code is required for registration"));
+                }
+                _ => {}
+            }
+            let registered_user_id = exec
+                .users()
+                .add_user(&req.username, &req.password_hash, permission)
+                .await
+                .map_err(|e| match e {
+                    DataBaseError::UniqueViolation { .. } => conflict!("Username already exists!"),
+                    _ => internal!(e, "Failed to register user"),
+                })?;
+            if let Some(code) = req.invitation_code
+                && reg_need_invite
+                && !brand_new_server
+            {
+                exec.invite_code()
+                    .revoke_invite_code(&[(code, registered_user_id)])
+                    .await
+                    .map_err(|e| internal!(e, "Failed to use invitation code!"))?;
+            }
+            Ok(registered_user_id)
+        })
+        .await?;
     Ok(general_json_res!(
         "User registered successfully",
         UserRegisterRes {
@@ -104,19 +112,35 @@ pub async fn user_login(
     State((state, _)): UserRouterState,
     Json(req): Json<UserLoginReq>,
 ) -> ApiResult<Json<GeneralResponse<UserLoginRes>>> {
-    let (user_op, mfa_op) = (state.db.users(), state.db.mfa());
-    let user = user_op
-        .query_user_by_username(&req.username)
-        .await
-        .map_err(|e| internal!(e, "Failed to query user from database"))?
-        .ok_or(bad_request!("User not found"))?;
-    if user.inner.password_hash != req.password_hash {
-        return Err(unauthorized!("Incorrect password"));
-    }
-    let need_mfa = mfa_op
-        .is_mfa_enabled(user.inner.id)
-        .await
-        .map_err(|e| internal!(e, "Failed to check if MFA is enabled for user"))?;
+    // TODO: RustRover cannot infer the type here, so fxxk u jetbrains!
+    let (user, need_mfa): (UserInternal, bool) = state
+        .db
+        .transaction(async |mut exec: EchoDatabaseExecutor<'_>| {
+            let user_row = exec
+                .users()
+                .query_user_by_username(&req.username)
+                .await
+                .map_err(|e| internal!(e, "Failed to query user from database"))?
+                .ok_or(bad_request!("User not found"))?;
+            let user_permission = exec
+                .permission()
+                .combined_query_user_permission(user_row.id, &user_row.role)
+                .await?;
+            let user = UserInternal {
+                inner: user_row,
+                permissions: user_permission,
+            };
+            if user.inner.password_hash != req.password_hash {
+                return Err(unauthorized!("Incorrect password"));
+            }
+            let need_mfa = exec
+                .mfa()
+                .mfa_enabled(user.inner.id)
+                .await
+                .map_err(|e| internal!(e, "Failed to check if MFA is enabled for user"))?;
+            Ok((user, need_mfa))
+        })
+        .await?;
     session
         .sign_basic_and_csrf_auth(user.inner.id)
         .map_err(|e| {

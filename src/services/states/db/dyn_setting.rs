@@ -2,27 +2,27 @@ use crate::models::dyn_setting::{
     DynSetting, DynSettingCollector, DynSettingsValueBindRow, DynSettingsValueRow,
 };
 use crate::services::states::db::{DataBaseError, DataBaseResult, SqliteBaseResultExt};
-use sqlx::{Executor, Sqlite, SqlitePool, query, query_as};
+use sqlx::{Executor, Sqlite, query, query_as};
 use std::backtrace::Backtrace;
 use std::borrow::Cow;
 
-pub struct DynSettingRepo<'a> {
-    pub pool: &'a SqlitePool,
+pub struct DynSettingsRepo<'a, E>
+where
+    for<'c> &'c mut E: Executor<'c, Database = Sqlite>,
+{
+    pub inner: &'a mut E,
 }
 
-impl<'a> DynSettingRepo<'a> {
-    pub fn new(pool: &'a SqlitePool) -> Self {
-        Self { pool }
-    }
-
-    pub(in crate::services) async fn get_inner<'c, K, E>(
-        &self,
+impl<'a, E> DynSettingsRepo<'a, E>
+where
+    for<'c> &'c mut E: Executor<'c, Database = Sqlite>,
+{
+    pub(in crate::services) async fn get_inner<K>(
+        &mut self,
         key: K,
-        executor: E,
     ) -> DataBaseResult<DynSettingsValueRow>
     where
         K: Into<Cow<'static, str>>,
-        E: Executor<'c, Database = Sqlite>,
     {
         let key_cow = key.into();
         let key_ref = key_cow.as_ref();
@@ -31,22 +31,20 @@ impl<'a> DynSettingRepo<'a> {
             "SELECT val FROM system_settings WHERE key = ?",
             key_ref
         )
-        .fetch_one(executor)
+        .fetch_one(&mut *self.inner)
         .await
         .resolve()
     }
 
-    pub(in crate::services) async fn get_with_dyn_tx<'c, T, E>(
-        &self,
-        key: T,
-        executor: E,
-    ) -> DataBaseResult<DynSettingsValueBindRow<T::Value>>
+    pub(in crate::services) async fn get_with_dyn_tx<K>(
+        &mut self,
+        key: K,
+    ) -> DataBaseResult<DynSettingsValueBindRow<K::Value>>
     where
-        T: DynSetting,
-        E: Executor<'c, Database = Sqlite>,
+        K: DynSetting,
     {
         let key_str = key.key();
-        let db_val = self.get_inner(key_str, executor).await?;
+        let db_val = self.get_inner(key_str).await?;
         let val = key
             .parse(&db_val.val)
             .map_err(|e| DataBaseError::DynSettingParse {
@@ -56,60 +54,79 @@ impl<'a> DynSettingRepo<'a> {
         Ok(DynSettingsValueBindRow { val })
     }
 
-    pub(in crate::services) async fn set_inner<'c, K, E>(
-        &self,
+    pub(in crate::services) async fn set_inner<K>(
+        &mut self,
         key: K,
         value: &str,
-        executor: E,
+        overwrite: bool,
     ) -> DataBaseResult<()>
     where
         K: Into<Cow<'static, str>>,
-        E: Executor<'c, Database = Sqlite>,
     {
         let key_cow = key.into();
         let key_ref = key_cow.as_ref();
-        query!(
-            r#"
-                INSERT INTO system_settings (key, val)
-                VALUES (?, ?)
-                ON CONFLICT(key) DO
-                    UPDATE SET
-                    val = excluded.val,
-                    updated_at = strftime('%s','now')
-            "#,
-            key_ref,
-            value,
-        )
-        .execute(executor)
-        .await
-        .resolve()?;
+        match overwrite {
+            true => {
+                query!(
+                    r#"
+                        INSERT INTO system_settings (key, val)
+                        VALUES (?, ?)
+                        ON CONFLICT(key) DO
+                            UPDATE SET
+                            val = excluded.val,
+                            updated_at = strftime('%s','now')
+                    "#,
+                    key_ref,
+                    value,
+                )
+                .execute(&mut *self.inner)
+                .await
+                .resolve()?;
+            }
+            false => {
+                query!(
+                    "INSERT OR IGNORE INTO system_settings (key, val) VALUES (?, ?)",
+                    key_ref,
+                    value,
+                )
+                .execute(&mut *self.inner)
+                .await
+                .resolve()?;
+            }
+        }
         Ok(())
     }
 
-    pub async fn initialise(&self) -> DataBaseResult<()> {
-        let mut tx = self.pool.begin().await?;
+    pub async fn initialise(&mut self) -> DataBaseResult<()> {
         for (&key, val) in DynSettingCollector::original_kv_map() {
-            self.set_inner(key, &val.val, &mut *tx).await?;
+            self.set_inner(key, &val.val, false).await?;
         }
-        tx.commit().await?;
         Ok(())
     }
 }
 
-// TODO: The current implementation is rather hacky and compromises encapsulation.
-// TODO: Consider refactoring using "transactions in closure"
 #[macro_export]
 macro_rules! get_batch_tuple_pure {
-    ($store:expr, $($setting:expr),+ $(,)?) => {{
+    ($state:expr, $($setting:expr),+ $(,)?) => {{
         async {
-            let mut tx = $store.pool.begin().await?;
-            let res = (
-                $(
-                    $store.get_with_dyn_tx($setting, &mut *tx).await?.val,
-                )+
-            );
-            tx.commit().await?;
-            Ok::<_, $crate::services::states::db::DataBaseError>(res)
+            use $crate::services::states::db::{DataBaseError, EchoDatabaseExecutor};
+            let res = $state
+                .transaction(async |mut exec: EchoDatabaseExecutor<'_>|{
+                    let out = (
+                        $(
+                            {
+                                let bind = exec
+                                    .dyn_settings()
+                                    .get_with_dyn_tx($setting)
+                                    .await?;
+                                bind.val
+                            },
+                        )+
+                    );
+                    Ok::<_, DataBaseError>(out)
+                })
+                .await?;
+            Ok::<_, DataBaseError>(res)
         }.await
     }};
 }

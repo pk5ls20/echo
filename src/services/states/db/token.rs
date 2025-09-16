@@ -1,19 +1,21 @@
 use crate::models::token::AuthTokenRaw;
 use crate::services::states::db::{DataBaseResult, SqliteBaseResultExt};
-use sqlx::{SqlitePool, query, query_as};
+use sqlx::{Executor, Sqlite, query, query_as};
 use time::OffsetDateTime;
 
-pub struct TokenRepo<'a> {
-    pool: &'a SqlitePool,
+pub struct TokenRepo<'a, E>
+where
+    for<'c> &'c mut E: Executor<'c, Database = Sqlite>,
+{
+    pub inner: &'a mut E,
 }
 
-impl<'a> TokenRepo<'a> {
-    pub fn new(pool: &'a SqlitePool) -> Self {
-        Self { pool }
-    }
-
+impl<'a, E> TokenRepo<'a, E>
+where
+    for<'c> &'c mut E: Executor<'c, Database = Sqlite>,
+{
     pub async fn insert_user_token(
-        &self,
+        &mut self,
         user_id: i64,
         token: String,
         exp_time: OffsetDateTime,
@@ -33,12 +35,12 @@ impl<'a> TokenRepo<'a> {
             token,
             exp_time
         )
-        .fetch_one(self.pool)
+        .fetch_one(&mut *self.inner)
         .await
         .resolve()
     }
 
-    pub async fn get_user_token(&self, user_id: i64) -> DataBaseResult<Vec<AuthTokenRaw>> {
+    pub async fn get_user_token(&mut self, user_id: i64) -> DataBaseResult<Vec<AuthTokenRaw>> {
         query_as!(
             AuthTokenRaw,
             r#"
@@ -54,12 +56,16 @@ impl<'a> TokenRepo<'a> {
             "#,
             user_id
         )
-        .fetch_all(self.pool)
+        .fetch_all(&mut *self.inner)
         .await
         .resolve()
     }
 
-    pub async fn invalidate_user_token(&self, user_id: i64, token: String) -> DataBaseResult<()> {
+    pub async fn invalidate_user_token(
+        &mut self,
+        user_id: i64,
+        token: String,
+    ) -> DataBaseResult<()> {
         query!(
             r#"
                 UPDATE auth_tokens
@@ -69,7 +75,7 @@ impl<'a> TokenRepo<'a> {
             user_id,
             token
         )
-        .fetch_one(self.pool)
+        .fetch_one(&mut *self.inner)
         .await
         .resolve()?;
         Ok(())

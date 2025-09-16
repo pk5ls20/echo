@@ -54,8 +54,8 @@ pub struct MFAService {
 
 impl MFAService {
     pub async fn new(state: Arc<EchoState>) -> MFAServiceResult<Self> {
-        let dyn_setting_op = state.db.dyn_settings();
-        let (rp_id, rp_origin, rp_name) =
+        let dyn_setting_op = &state.db;
+        let (rp_id, rp_origin, rp_name): (String, String, String) =
             get_batch_tuple_pure!(&dyn_setting_op, RpId, RpOrigin, RpName)
                 .map_err(|e| WebAuthnInit(e.to_string()))?;
         let rp_origin = Url::parse(&rp_origin).map_err(|_| InvalidWebauthnRpOrigin)?;

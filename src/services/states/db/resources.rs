@@ -1,20 +1,24 @@
 use crate::models::resource::{ResourceItemRaw, ResourceItemRawInner, ResourceReferenceInner};
 use crate::models::{Change, DiffRef};
 use crate::services::states::db::{DataBaseResult, SqliteBaseResultExt};
-use sqlx::{SqlitePool, query};
+use sqlx::{Executor, Sqlite, query};
 use uuid::Uuid;
 
-#[derive(Copy, Clone)]
-pub struct ResourceRepo<'a> {
-    pool: &'a SqlitePool,
+pub struct ResourceRepo<'a, E>
+where
+    for<'c> &'c mut E: Executor<'c, Database = Sqlite>,
+{
+    pub inner: &'a mut E,
 }
 
-impl<'a> ResourceRepo<'a> {
-    pub fn new(pool: &'a SqlitePool) -> Self {
-        Self { pool }
-    }
-
-    pub async fn add_resource(&self, res_item_inner: ResourceItemRawInner) -> DataBaseResult<i64> {
+impl<'a, E> ResourceRepo<'a, E>
+where
+    for<'c> &'c mut E: Executor<'c, Database = Sqlite>,
+{
+    pub async fn add_resource(
+        &mut self,
+        res_item_inner: ResourceItemRawInner,
+    ) -> DataBaseResult<i64> {
         let result = query!(
             "INSERT INTO resources (uploader_id, res_name, res_uuid, res_ext) VALUES (?, ?, ?, ?)",
             res_item_inner.uploader_id,
@@ -22,21 +26,24 @@ impl<'a> ResourceRepo<'a> {
             res_item_inner.res_uuid,
             res_item_inner.uploader_id
         )
-        .execute(self.pool)
+        .execute(&mut *self.inner)
         .await
         .resolve()?;
         let res_id = result.last_insert_rowid();
         Ok(res_id)
     }
 
-    pub async fn add_resource_ref(&self, res_ref: ResourceReferenceInner) -> DataBaseResult<()> {
+    pub async fn add_resource_ref(
+        &mut self,
+        res_ref: ResourceReferenceInner,
+    ) -> DataBaseResult<()> {
         query!(
             "INSERT INTO resource_references (res_id, target_id, target_type) VALUES ($1, $2, $3)",
             res_ref.res_id,
             res_ref.target_id,
             res_ref.target_type
         )
-        .execute(self.pool)
+        .execute(&mut *self.inner)
         .await
         .resolve()?;
         Ok(())
@@ -46,7 +53,6 @@ impl<'a> ResourceRepo<'a> {
         &mut self,
         ref_diff: DiffRef<'_, ResourceReferenceInner>,
     ) -> DataBaseResult<()> {
-        let mut tx = self.pool.begin().await?;
         for diff in ref_diff.iter() {
             match diff.kind {
                 Change::Added => {
@@ -56,7 +62,7 @@ impl<'a> ResourceRepo<'a> {
                         diff.value.target_id,
                         diff.value.target_type
                     )
-                    .execute(&mut *tx)
+                    .execute(&mut *self.inner)
                     .await
                     .resolve()?;
                 }
@@ -67,13 +73,12 @@ impl<'a> ResourceRepo<'a> {
                         diff.value.target_id,
                         diff.value.target_type
                     )
-                    .execute(&mut *tx)
+                    .execute(&mut *self.inner)
                     .await
                     .resolve()?;
                 }
             }
         }
-        tx.commit().await?;
         Ok(())
     }
 
@@ -81,7 +86,6 @@ impl<'a> ResourceRepo<'a> {
         &mut self,
         res_ids: &[ResourceReferenceInner],
     ) -> DataBaseResult<()> {
-        let mut tx = self.pool.begin().await?;
         for res in res_ids {
             query!(
                 "DELETE FROM resource_references WHERE res_id = $1 AND target_id = $2 AND target_type = $3",
@@ -89,11 +93,10 @@ impl<'a> ResourceRepo<'a> {
                 res.target_id,
                 res.target_type
             )
-            .execute(&mut *tx)
+            .execute(&mut *self.inner)
             .await
             .resolve()?;
         }
-        tx.commit().await?;
         Ok(())
     }
 
@@ -115,7 +118,7 @@ impl<'a> ResourceRepo<'a> {
             "#,
             ids_json
         )
-        .fetch_all(self.pool)
+        .fetch_all(&mut *self.inner)
         .await
         .resolve()?;
         let out = rows

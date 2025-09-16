@@ -5,7 +5,7 @@ use crate::models::users::Role;
 use crate::services::echo_baker::{EchoBaker, EchoBakerError};
 use crate::services::hybrid_cache::HybridCacheService;
 use crate::services::states::EchoState;
-use crate::services::states::db::{PageQueryBinder, PageQueryResult};
+use crate::services::states::db::{EchoDatabaseExecutor, PageQueryBinder, PageQueryResult};
 use axum::Json;
 use axum::extract::State;
 use serde::{Deserialize, Serialize};
@@ -50,14 +50,17 @@ pub async fn add_echo(
         .map_err(|e| internal!(e, "Failed to add echo"))?;
     state
         .db
-        .echos()
-        .add_echo(
-            current_user_info.user_id,
-            &baked.safe_echo,
-            baked.res_ids.as_deref().unwrap_or_default(),
-            &req.inner.echo_permission_ids,
-            req.inner.is_private,
-        )
+        .transaction(async |mut exec: EchoDatabaseExecutor<'_>| {
+            exec.echo()
+                .add_echo(
+                    current_user_info.user_id,
+                    &baked.safe_echo,
+                    baked.res_ids.as_deref().unwrap_or_default(),
+                    &req.inner.echo_permission_ids,
+                    req.inner.is_private,
+                )
+                .await
+        })
         .await
         .map_err(|e| internal!(e, "Failed to add echo"))?;
     Ok(general_json_res!("Echo added successfully"))
@@ -90,14 +93,17 @@ pub async fn modify_echo(
         .map_err(|e| internal!(e, "Failed to add echo"))?;
     state
         .db
-        .echos()
-        .update_echo(
-            req.echo_id,
-            &baked.safe_echo,
-            baked.res_ids.as_deref().unwrap_or_default(),
-            &req.inner.echo_permission_ids,
-            req.inner.is_private,
-        )
+        .transaction(async |mut exec: EchoDatabaseExecutor<'_>| {
+            exec.echo()
+                .update_echo(
+                    req.echo_id,
+                    &baked.safe_echo,
+                    baked.res_ids.as_deref().unwrap_or_default(),
+                    &req.inner.echo_permission_ids,
+                    req.inner.is_private,
+                )
+                .await
+        })
         .await
         .map_err(|e| internal!(e, "Failed to update echo"))?;
     Ok(general_json_res!("Echo updated successfully"))
@@ -118,9 +124,12 @@ pub async fn delete_echo(
         .get_user_by_user_id(current_user_info.user_id)
         .await
         .map_err(|e| internal!(e, "Failed to fetch user"))?;
-    let state = state.db.echos();
-    let maybe_delete_echo = state
-        .query_echo_by_id(req.echo_id)
+    // TODO: RustRover cannot infer the type here, so fxxk u jetbrains!
+    let maybe_delete_echo: Option<Echo> = state
+        .db
+        .single(async |mut exec: EchoDatabaseExecutor<'_>| {
+            exec.echo().query_echo_by_id(req.echo_id).await
+        })
         .await
         .map_err(|e| internal!(e, "Failed to fetch echo"))?;
     match maybe_delete_echo {
@@ -132,7 +141,10 @@ pub async fn delete_echo(
                 return Err(bad_request!("Can only delete your own echo"));
             }
             state
-                .delete_echo(req.echo_id)
+                .db
+                .transaction(async |mut exec: EchoDatabaseExecutor<'_>| {
+                    exec.echo().delete_echo(req.echo_id).await
+                })
                 .await
                 .map_err(|e| internal!(e, "Failed to delete echo"))?;
             Ok(general_json_res!("Echo deleted successfully"))
@@ -160,8 +172,11 @@ pub async fn list_echo(
         .map_err(|e| internal!(e, "Failed to fetch user"))?;
     let mut echos = state
         .db
-        .echos()
-        .query_user_echo(req.user_id, req.page_query)
+        .single(async |mut exec: EchoDatabaseExecutor<'_>| {
+            exec.echo()
+                .query_user_echo(req.user_id, req.page_query)
+                .await
+        })
         .await
         .map_err(|e| internal!(e, "Failed to fetch echo"))?;
     echos

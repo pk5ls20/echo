@@ -10,7 +10,7 @@ use crate::models::session::BasicAuthData;
 use crate::models::users::Role;
 use crate::services::hybrid_cache::HybridCacheService;
 use crate::services::states::EchoState;
-use crate::services::states::db::DataBaseError;
+use crate::services::states::db::{DataBaseError, EchoDatabaseExecutor};
 use crate::services::upload_tracker::{
     ResourceUploadLimits, ResourceUploadProtocol, UploadTrackerService,
 };
@@ -147,12 +147,15 @@ pub async fn upload_commit(
                 .map_err(|e| internal!(&e, "Failed to commit upload session!"))?;
             let res_id = state
                 .db
-                .resources()
-                .add_resource(ResourceItemRawInner {
-                    uploader_id: current_user_info.user_id,
-                    res_name: file_name,
-                    res_uuid: req.upload_session_uuid, // TODO: use Neko's UUID algo
-                    res_ext: file_ext,
+                .single(async |mut exec: EchoDatabaseExecutor<'_>| {
+                    exec.resources()
+                        .add_resource(ResourceItemRawInner {
+                            uploader_id: current_user_info.user_id,
+                            res_name: file_name,
+                            res_uuid: req.upload_session_uuid, // TODO: use Neko's UUID algo
+                            res_ext: file_ext,
+                        })
+                        .await
                 })
                 .await
                 .map_err(|e| internal!(&e, "Failed to add resource to database"))?;
@@ -196,8 +199,9 @@ pub async fn update_resource(
     }
     state
         .db
-        .resources()
-        .update_resource((&req.diff).into())
+        .transaction(async |mut exec: EchoDatabaseExecutor<'_>| {
+            exec.resources().update_resource((&req.diff).into()).await
+        })
         .await
         .map_err(|e| internal!(e, "Failed to update resource"))?;
     Ok(general_json_res!("Resource updated successfully"))
@@ -224,8 +228,11 @@ pub async fn delete_resource(
     }
     state
         .db
-        .resources()
-        .delete_resources_batch(&req.resources)
+        .transaction(async |mut exec: EchoDatabaseExecutor<'_>| {
+            exec.resources()
+                .delete_resources_batch(&req.resources)
+                .await
+        })
         .await
         .map_err(|e| internal!(e, "Failed to delete resource"))?;
     Ok(general_json_res!("Resource deleted successfully"))
@@ -257,8 +264,11 @@ pub async fn get_resource_by_ids(
     }
     let list = state
         .db
-        .resources()
-        .get_resource_by_id_batch(&req.res_ids)
+        .single(async |mut exec: EchoDatabaseExecutor<'_>| {
+            exec.resources()
+                .get_resource_by_id_batch(&req.res_ids)
+                .await
+        })
         .await
         .map_err(|e| match e {
             DataBaseError::RowNotFound(_) => bad_request!("Resource not found"),

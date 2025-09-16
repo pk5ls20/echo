@@ -1,6 +1,7 @@
-use crate::models::users::{User, UserRowOptional};
+use crate::models::users::{User, UserInternal, UserRowOptional};
 use crate::services::hybrid_cache::{HybridCacheError, HybridCacheResult};
 use crate::services::states::EchoState;
+use crate::services::states::db::EchoDatabaseExecutor;
 use scc::HashCache;
 use std::sync::Arc;
 use time::OffsetDateTime;
@@ -26,11 +27,24 @@ impl HybridUsersCache {
         let db_res = self
             .state
             .db
-            .users()
-            .query_user_by_id(user_id)
-            .await?
-            .ok_or(HybridCacheError::ItemNotFound)?
-            .into_public();
+            .transaction(async |mut exec: EchoDatabaseExecutor<'_>| {
+                let user_row = exec
+                    .users()
+                    .query_user_by_id(user_id)
+                    .await?
+                    .ok_or(HybridCacheError::ItemNotFound)?;
+                let user_permission = exec
+                    .permission()
+                    .combined_query_user_permission(user_row.id, &user_row.role)
+                    .await?;
+                let res = UserInternal {
+                    inner: user_row,
+                    permissions: user_permission,
+                }
+                .into_public();
+                Ok::<_, HybridCacheError>(res)
+            })
+            .await?;
         let db_res = Arc::new(db_res);
         self.cache
             .put_async(user_id, db_res.clone())
@@ -41,13 +55,23 @@ impl HybridUsersCache {
 
     pub async fn update_user(&self, updated_user: UserRowOptional) -> HybridCacheResult<()> {
         let user_id = updated_user.id;
-        self.state.db.users().update_user(updated_user).await?;
+        self.state
+            .db
+            .single(async |mut exec: EchoDatabaseExecutor<'_>| {
+                exec.users().update_user(updated_user).await
+            })
+            .await?;
         self.cache.remove_async(&user_id).await;
         Ok(())
     }
 
     pub async fn remove_user_by_id(&self, user_id: i64) -> HybridCacheResult<()> {
-        self.state.db.users().remove_user_by_id(user_id).await?;
+        self.state
+            .db
+            .single(async |mut exec: EchoDatabaseExecutor<'_>| {
+                exec.users().remove_user_by_id(user_id).await
+            })
+            .await?;
         self.cache.remove_async(&user_id).await;
         Ok(())
     }
@@ -61,8 +85,11 @@ impl HybridUsersCache {
     ) -> HybridCacheResult<()> {
         self.state
             .db
-            .permissions()
-            .grant_user_permission(user_id, assigner_id, permission_ids, exp_time)
+            .transaction(async |mut exec: EchoDatabaseExecutor<'_>| {
+                exec.permission()
+                    .grant_user_permission(user_id, assigner_id, permission_ids, exp_time)
+                    .await
+            })
             .await?;
         self.cache.remove_async(&user_id).await;
         Ok(())
@@ -75,8 +102,11 @@ impl HybridUsersCache {
     ) -> HybridCacheResult<()> {
         self.state
             .db
-            .permissions()
-            .revoke_permissions(user_id, permission_ids)
+            .transaction(async |mut exec: EchoDatabaseExecutor<'_>| {
+                exec.permission()
+                    .revoke_permissions(user_id, permission_ids)
+                    .await
+            })
             .await?;
         self.cache.remove_async(&user_id).await;
         Ok(())

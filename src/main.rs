@@ -13,6 +13,7 @@ mod utils;
 
 use crate::errors::EchoError;
 use crate::routers::router;
+use crate::services::states::db::EchoDatabaseExecutor;
 use clap::Parser;
 use services::states::EchoState;
 use services::states::auth::AuthState;
@@ -139,7 +140,10 @@ async fn main() -> anyhow::Result<()> {
     }
     let db = DataBaseState::new(sqlx_pool);
     tracing::info!("Initializing db dyn settings...");
-    db.dyn_settings().initialise().await?;
+    db.transaction(async |mut exec: EchoDatabaseExecutor<'_>| {
+        exec.dyn_settings().initialise().await
+    })
+    .await?;
     let cache = CacheState::new();
     let auth = AuthState::new();
     let addr = format!("{}:{}", config.common.host, config.common.port);
