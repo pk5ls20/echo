@@ -2,9 +2,10 @@ use proc_macro::TokenStream;
 use proc_macro2::Span;
 use quote::{format_ident, quote};
 use syn::{
-    Attribute, Fields, Ident, ItemStruct, LitInt, LitStr, Meta, Result as SynResult, Token,
+    Attribute, Data, DeriveInput, Fields, Generics, Ident, ItemStruct, LitInt, LitStr, Meta,
+    Result as SynResult, Token,
     parse::{Parse, ParseStream},
-    parse_macro_input,
+    parse_macro_input, parse_quote,
 };
 
 struct EchoExtArgs {
@@ -123,7 +124,8 @@ pub fn echo_ext(input: TokenStream) -> TokenStream {
         #[used]
         #[doc(hidden)]
         #[unsafe(no_mangle)]
-        #[unsafe(link_section = ".echo_ext.ids")]
+        #[cfg_attr(target_vendor = "apple", unsafe(link_section = "__DATA,.echo_ext.ids"))]
+        #[cfg_attr(not(target_vendor = "apple"), unsafe(link_section = ".echo_ext.ids"))]
         #[unsafe(export_name = #guard_export)]
         static #guard_ident: [u8; 0] = [];
 
@@ -136,4 +138,117 @@ pub fn echo_ext(input: TokenStream) -> TokenStream {
     };
 
     expanded.into()
+}
+
+struct CodeAttr {
+    value: u32,
+}
+
+impl Parse for CodeAttr {
+    fn parse(input: ParseStream) -> SynResult<Self> {
+        let lit: LitInt = input.parse()?;
+        Ok(Self {
+            value: lit.base10_parse()?,
+        })
+    }
+}
+
+struct VariantInfo {
+    ident: Ident,
+    fields: Fields,
+    code: Option<u32>,
+}
+
+struct EnumInput {
+    ident: Ident,
+    generics: Generics,
+    variants: Vec<VariantInfo>,
+}
+
+impl Parse for EnumInput {
+    fn parse(input: ParseStream) -> SynResult<Self> {
+        let di: DeriveInput = input.parse()?;
+        let ident = di.ident;
+        let generics = di.generics;
+        let data = match di.data {
+            Data::Enum(e) => e,
+            _ => {
+                return Err(syn::Error::new(
+                    Span::call_site(),
+                    "EchoErrCode can only be derived for enums",
+                ));
+            }
+        };
+        let mut variants = Vec::new();
+        for v in data.variants {
+            let code = v
+                .attrs
+                .iter()
+                .find(|a| a.path().is_ident("code"))
+                .and_then(|a| a.parse_args::<CodeAttr>().ok())
+                .map(|c| c.value);
+            variants.push(VariantInfo {
+                ident: v.ident,
+                fields: v.fields,
+                code,
+            });
+        }
+        Ok(Self {
+            ident,
+            generics,
+            variants,
+        })
+    }
+}
+
+#[proc_macro_derive(EchoBusinessError, attributes(code))]
+pub fn derive_echo_err_code(input: TokenStream) -> TokenStream {
+    let EnumInput {
+        ident,
+        generics,
+        variants,
+    } = parse_macro_input!(input as EnumInput);
+    let (impl_generics, ty_generics, where_clause) = generics.split_for_impl();
+
+    let mut some_arms = Vec::new();
+    let mut guards = Vec::new();
+
+    for v in variants.iter() {
+        if let Some(code) = v.code {
+            let v_ident = &v.ident;
+            let pat = match &v.fields {
+                Fields::Unit => quote!(Self::#v_ident),
+                Fields::Unnamed(_) => quote!(Self::#v_ident(..)),
+                Fields::Named(_) => quote!(Self::#v_ident { .. }),
+            };
+            some_arms.push(quote!(#pat => Some(#code),));
+            let guard_ident =
+                format_ident!("__ECHO_ERR_CODE_GUARD__{}_{}_{}", ident, v_ident, code);
+            let guard_export_name =
+                syn::LitStr::new(&format!("__echo_err_code__{}", code), Span::call_site());
+            guards.push(quote! {
+                #[doc(hidden)]
+                #[used]
+                #[unsafe(no_mangle)]
+                #[unsafe(export_name = #guard_export_name)]
+                #[cfg_attr(target_vendor = "apple", unsafe(link_section = "__DATA,.echo_err_code"))]
+                #[cfg_attr(not(target_vendor = "apple"), unsafe(link_section = ".echo_err_code"))]
+                static #guard_ident: [u8; 0] = [];
+            });
+        }
+    }
+
+    let biz_trait: syn::Path = parse_quote!(crate::errors::EchoBusinessErrCode);
+    let expanded = quote! {
+        impl #impl_generics #biz_trait for #ident #ty_generics #where_clause {
+            fn code(&self) -> Option<u32> {
+                match self {
+                    #(#some_arms)*
+                    _ => None
+                }
+            }
+        }
+        #(#guards)*
+    };
+    TokenStream::from(expanded)
 }

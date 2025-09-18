@@ -1,7 +1,7 @@
 use crate::services::states::EchoState;
 use crate::services::states::cache::MokaExpiration;
 use abv::bv2av;
-use echo_macros::EchoExt;
+use echo_macros::{EchoBusinessError, EchoExt};
 use leptos::prelude::*;
 use markup5ever::Attribute;
 use std::cell::Ref;
@@ -10,7 +10,7 @@ use time::Duration;
 use uuid::Uuid;
 
 // TODO: zero-copy error key display
-#[derive(Debug, Eq, PartialEq, thiserror::Error)]
+#[derive(Debug, Eq, PartialEq, thiserror::Error, EchoBusinessError)]
 pub enum EchoExtError {
     #[error("Failed to upgrade weak arc")]
     ArcUpgradeError,

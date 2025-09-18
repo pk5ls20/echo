@@ -3,12 +3,13 @@
 mod ext_plugins;
 mod pipeline;
 
+use echo_macros::EchoBusinessError;
 use markup5ever::{Attribute, QualName};
 use markup5ever_rcdom::{Handle, NodeData};
 use std::cell::RefCell;
 use std::num::ParseIntError;
 
-#[derive(Debug, thiserror::Error)]
+#[derive(Debug, thiserror::Error, EchoBusinessError)]
 pub enum GladiatorPipelineError {
     #[error(transparent)]
     SerializeDom(#[from] std::io::Error),

@@ -40,3 +40,42 @@ pub enum EchoError {
 }
 
 pub type EchoResult<T> = Result<T, EchoError>;
+
+pub trait EchoBusinessErrCode {
+    fn code(&self) -> Option<u32>;
+}
+
+impl<T: EchoBusinessErrCode + ?Sized> EchoBusinessErrCode for &T {
+    #[inline]
+    fn code(&self) -> Option<u32> {
+        (**self).code()
+    }
+}
+
+impl<T: EchoBusinessErrCode + ?Sized> EchoBusinessErrCode for &mut T {
+    #[inline]
+    fn code(&self) -> Option<u32> {
+        (**self).code()
+    }
+}
+
+impl EchoBusinessErrCode for core::convert::Infallible {
+    #[inline]
+    fn code(&self) -> Option<u32> {
+        None
+    }
+}
+
+impl EchoBusinessErrCode for std::time::SystemTimeError {
+    #[inline]
+    fn code(&self) -> Option<u32> {
+        None
+    }
+}
+
+impl EchoBusinessErrCode for time::error::ComponentRange {
+    #[inline]
+    fn code(&self) -> Option<u32> {
+        None
+    }
+}

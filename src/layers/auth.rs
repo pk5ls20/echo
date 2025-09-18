@@ -9,8 +9,8 @@ use axum::response::IntoResponse;
 impl From<SessionError> for ApiError {
     fn from(e: SessionError) -> Self {
         match e {
+            SessionError::MissingCookie(inner) => unauthorized!(err = inner),
             SessionError::MissingSessionId
-            | SessionError::MissingCookie(_)
             | SessionError::SessionExpired
             | SessionError::InvalidSessionId(_) => unauthorized!(err = e),
             _ => internal!(err = e),

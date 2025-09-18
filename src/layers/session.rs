@@ -9,6 +9,7 @@ use axum::http::request::Parts;
 use axum::http::{Request, Response};
 use base64::{Engine as _, engine::general_purpose as b64_general_engine};
 use cookie::{Cookie, SameSite};
+use echo_macros::EchoBusinessError;
 use std::ops::Add;
 use std::sync::Arc;
 use std::task::{Context, Poll};
@@ -22,18 +23,22 @@ pub struct SessionHelper {
     cookies: Cookies,
 }
 
-#[derive(Debug, thiserror::Error)]
+#[derive(Debug, thiserror::Error, EchoBusinessError)]
 pub enum SessionError {
     // Missing
     #[error("Cannot extract session id in cookies")]
+    #[code(10000)]
     MissingSessionId,
-    #[error("Failed to extract {0} from cookies")]
-    MissingCookie(&'static str),
+    #[error(transparent)]
+    #[code(11000)]
+    MissingCookie(#[from] MissingCookieError),
     // Expired
     #[error("Your session has expired")]
+    #[code(12000)]
     SessionExpired,
     // Invalid
     #[error("Invalid Session ID: {0}, please log in again")]
+    #[code(13000)]
     InvalidSessionId(Uuid),
     // misc
     #[error(transparent)]
@@ -47,59 +52,6 @@ pub enum SessionError {
 }
 
 pub type SessionResult<T> = Result<T, SessionError>;
-
-macro_rules! auth_session {
-    (
-        $(
-            $base_name:ident => (
-                data = $inner_ty:ty,
-                same_site = $same_site:expr
-            )
-        ),* $(,)?
-    ) => {
-        $(
-            paste::paste! {
-                fn [<sign_ $base_name>](&self, inner: $inner_ty) -> SessionResult<()> {
-                    use crate::models::const_val::[<ECHO_ $base_name:snake:upper>];
-                    use crate::models::const_val::[<ECHO_ $base_name:snake:upper _EXPIRE>];
-                    let sess: [<$base_name:camel SessionData>] = BaseSession::new(*self.session_id(), inner);
-                    let bytes = rmp_serde::to_vec(&sess)?;
-                    let enc = b64_general_engine::URL_SAFE.encode(bytes);
-                    self.[<$base_name _jar>]().add(
-                        Cookie::build(([<ECHO_ $base_name:snake:upper>], enc))
-                            .path("/")
-                            .secure(cfg!(feature = "secure-cookie"))
-                            .http_only(cfg!(feature = "secure-cookie"))
-                            .max_age([<ECHO_ $base_name:snake:upper _EXPIRE>])
-                            .same_site($same_site)
-                            .build(),
-                    );
-                    Ok(())
-                }
-
-                pub(crate) fn [<extract_ $base_name>](&self) -> SessionResult<[<$base_name:camel SessionData>]> {
-                    use crate::models::const_val::[<ECHO_ $base_name:snake:upper>];
-                    use crate::models::const_val::[<ECHO_ $base_name:snake:upper _EXPIRE>];
-                    let cookie = self
-                        .[<$base_name _jar>]()
-                        .get([<ECHO_ $base_name:snake:upper>])
-                        .ok_or(SessionError::MissingCookie([<ECHO_ $base_name:snake:upper>]))?;
-                    let raw = b64_general_engine::URL_SAFE
-                        .decode(cookie.value())
-                        .map_err(SessionError::Base64Decode)?;
-                    let sess: [<$base_name:camel SessionData>] = rmp_serde::from_slice(&raw)?;
-                    if sess.session_id != *self.session_id() {
-                        return Err(SessionError::InvalidSessionId(sess.session_id.clone()));
-                    }
-                    if sess.create_at.add([<ECHO_ $base_name:snake:upper _EXPIRE>]) <= time::OffsetDateTime::now_utc() {
-                        return Err(SessionError::SessionExpired);
-                    }
-                    Ok(sess)
-                }
-            }
-        )*
-    };
-}
 
 impl SessionHelper {
     pub fn new(state: Arc<EchoState>, cookies: Cookies) -> Self {
@@ -126,13 +78,6 @@ impl SessionHelper {
         self.cookies.private(self.state.auth.get_mfa_auth_key())
     }
 
-    auth_session!(
-        basic_auth => (data = BasicAuthData, same_site = SameSite::Lax),
-        csrf_auth => (data = CsrfAuthData, same_site = SameSite::Strict),
-        pre_mfa_auth => (data = PreMfaAuthData, same_site = SameSite::Lax),
-        mfa_auth => (data = MfaAuthData, same_site = SameSite::Lax),
-    );
-
     pub fn sign_basic_and_csrf_auth(&self, user_id: i64) -> SessionResult<()> {
         self.sign_basic_auth(BasicAuthData::new(user_id))?;
         self.sign_csrf_auth(())?;
@@ -147,6 +92,72 @@ impl SessionHelper {
         self.sign_mfa_auth(())
     }
 }
+
+macro_rules! auth_session {
+    (
+        $( $base_name:ident => ( data = $inner_ty:ty, same_site = $same_site:expr, biz_code = $biz_code:expr ) ),* $(,)?
+    ) => {
+        paste::paste! {
+            #[derive(Debug, thiserror::Error, EchoBusinessError)]
+            pub enum MissingCookieError {
+                $(
+                    #[error("Failed to extract {cookie} cookie", cookie = stringify!($base_name))]
+                    #[code($biz_code)]
+                    [<$base_name:camel>],
+                )*
+            }
+        }
+        $(
+            paste::paste! {
+                impl SessionHelper {
+                    fn [<sign_ $base_name>](&self, inner: $inner_ty) -> SessionResult<()> {
+                        use crate::models::const_val::[<ECHO_ $base_name:snake:upper>];
+                        use crate::models::const_val::[<ECHO_ $base_name:snake:upper _EXPIRE>];
+                        let sess: [<$base_name:camel SessionData>] = BaseSession::new(*self.session_id(), inner);
+                        let bytes = rmp_serde::to_vec(&sess)?;
+                        let enc = b64_general_engine::URL_SAFE.encode(bytes);
+                        self.[<$base_name _jar>]().add(
+                            Cookie::build(([<ECHO_ $base_name:snake:upper>], enc))
+                                .path("/")
+                                .secure(cfg!(feature = "secure-cookie"))
+                                .http_only(cfg!(feature = "secure-cookie"))
+                                .max_age([<ECHO_ $base_name:snake:upper _EXPIRE>])
+                                .same_site($same_site)
+                                .build(),
+                        );
+                        Ok(())
+                    }
+                    pub(crate) fn [<extract_ $base_name>](&self) -> SessionResult<[<$base_name:camel SessionData>]> {
+                        use crate::models::const_val::[<ECHO_ $base_name:snake:upper>];
+                        use crate::models::const_val::[<ECHO_ $base_name:snake:upper _EXPIRE>];
+                        let cookie = self
+                            .[<$base_name _jar>]()
+                            .get([<ECHO_ $base_name:snake:upper>])
+                            .ok_or(MissingCookieError::[<$base_name:camel>])?;
+                        let raw = b64_general_engine::URL_SAFE
+                            .decode(cookie.value())
+                            .map_err(SessionError::Base64Decode)?;
+                        let sess: [<$base_name:camel SessionData>] = rmp_serde::from_slice(&raw)?;
+                        if sess.session_id != *self.session_id() {
+                            return Err(SessionError::InvalidSessionId(sess.session_id.clone()));
+                        }
+                        if sess.create_at.add([<ECHO_ $base_name:snake:upper _EXPIRE>]) <= time::OffsetDateTime::now_utc() {
+                            return Err(SessionError::SessionExpired);
+                        }
+                        Ok(sess)
+                    }
+                }
+            }
+        )*
+    };
+}
+
+auth_session!(
+    basic_auth => (data = BasicAuthData, same_site = SameSite::Lax, biz_code = 11100),
+    csrf_auth => (data = CsrfAuthData, same_site = SameSite::Strict, biz_code = 11200),
+    pre_mfa_auth => (data = PreMfaAuthData, same_site = SameSite::Lax, biz_code = 11300),
+    mfa_auth => (data = MfaAuthData, same_site = SameSite::Lax, biz_code = 11400),
+);
 
 impl<S> FromRequestParts<S> for SessionHelper
 where

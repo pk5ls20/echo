@@ -1,3 +1,5 @@
+use crate::errors::EchoBusinessErrCode;
+use crate::services::states::db::DataBaseError;
 use axum::Json;
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
@@ -30,6 +32,7 @@ where
 pub struct ApiError {
     #[serde(skip)]
     pub status: StatusCode,
+    pub code: Option<u32>,
     pub message: String,
 }
 
@@ -43,17 +46,22 @@ impl ApiError {
         fallback_msg: &str,
     ) -> Self
     where
-        E: std::error::Error,
+        E: std::error::Error + EchoBusinessErrCode,
         T: Into<String>,
     {
         let err_user_msg = msg.map(|m| m.into()).unwrap_or_else(|| fallback_msg.into());
-        let mut err_emit_msg = format!("An api error occurred!\nmsg: {}", &err_user_msg);
+        let business_code = err.as_ref().and_then(|e| e.code());
+        let mut err_emit_msg = format!(
+            "An api error occurred!\nmsg: {}\nbusiness_code: {:?}",
+            &err_user_msg, &business_code
+        );
         if let Some(err) = err {
             err_emit_msg.push_str(&format!("\nerror: {}", err));
             tracing::error!("{}\nStack: {:?}", &err_emit_msg, &err);
         }
         Self {
             status,
+            code: business_code,
             message: err_user_msg,
         }
     }
@@ -72,7 +80,7 @@ macro_rules! define_api_error {
             #[inline]
             pub fn $fn_name<E, T>(err: Option<E>, msg: Option<T>) -> Self
             where
-                E: ::std::error::Error,
+                E: ::std::error::Error + $crate::errors::EchoBusinessErrCode,
                 T: Into<String>,
             {
                 Self::api_error_inner($http_status, err, msg, $fallback_msg)
@@ -127,7 +135,6 @@ macro_rules! general_json_res {
     };
 }
 
-use crate::services::states::db::DataBaseError;
 pub(crate) use general_json_res;
 
 impl IntoResponse for ApiError {

@@ -8,6 +8,7 @@ use crate::services::states::EchoState;
 use crate::services::states::cache::MokaExpiration;
 use crate::services::states::db::DataBaseError;
 use bytes::Bytes;
+use echo_macros::EchoBusinessError;
 use rand::{Rng, rng};
 use std::sync::Arc;
 use time::Duration;
@@ -15,13 +16,13 @@ use totp_rs::{TOTP, TotpUrlError};
 use url::Url;
 use webauthn_rs::prelude::*;
 
-#[derive(Debug, thiserror::Error)]
+#[derive(Debug, thiserror::Error, EchoBusinessError)]
 pub enum TOTPError {
     #[error(transparent)]
     TotpUrl(#[from] TotpUrlError),
 }
 
-#[derive(Debug, thiserror::Error)]
+#[derive(Debug, thiserror::Error, EchoBusinessError)]
 pub enum AuthnError {
     #[error("Failed to init WebAuthn service: {0}")]
     WebAuthnInit(String),
@@ -31,7 +32,7 @@ pub enum AuthnError {
     WebauthnOther(#[from] WebauthnError),
 }
 
-#[derive(Debug, thiserror::Error)]
+#[derive(Debug, thiserror::Error, EchoBusinessError)]
 pub enum MFAServiceError {
     #[error("RMP decode error: {0}")]
     RmpDecode(#[from] rmp_serde::decode::Error),

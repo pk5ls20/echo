@@ -1,12 +1,13 @@
 use crate::gladiator::prelude::*;
 use crate::services::states::EchoState;
+use echo_macros::EchoBusinessError;
 use frunk::hlist;
 use maplit::hashset;
 use smallvec::SmallVec;
 use std::borrow::Borrow;
 use std::sync::Weak as WeakArc;
 
-#[derive(Debug, thiserror::Error)]
+#[derive(Debug, thiserror::Error, EchoBusinessError)]
 pub enum EchoBakerError {
     #[error("Echo baker pre-check failed")]
     PreCheckFailed,

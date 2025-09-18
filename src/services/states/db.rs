@@ -16,6 +16,7 @@ use crate::services::states::db::resources::ResourceRepo;
 use crate::services::states::db::token::TokenRepo;
 use crate::services::states::db::users::UsersRepo;
 use crate::utils::smart_to_string::SmartStringError;
+use echo_macros::EchoBusinessError;
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use serde_inline_default::serde_inline_default;
@@ -25,7 +26,7 @@ use std::backtrace::Backtrace;
 use std::fmt::Debug;
 use std::sync::Arc;
 
-#[derive(Debug, thiserror::Error)]
+#[derive(Debug, thiserror::Error, EchoBusinessError)]
 pub enum DataBaseError {
     #[error("{source}")]
     SerdeJson {

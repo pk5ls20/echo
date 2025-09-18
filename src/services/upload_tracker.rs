@@ -5,6 +5,7 @@ use crate::utils::hex_ext::HexString;
 use crate::utils::stream_pipeline::stream_pipeline;
 use bitvec::prelude::*;
 use bytes::{Buf, Bytes, BytesMut};
+use echo_macros::EchoBusinessError;
 use futures::{Stream, StreamExt};
 use prost::Message;
 use sha1::{Digest, Sha1};
@@ -82,7 +83,7 @@ impl ResourceUploadProtocol {
     }
 }
 
-#[derive(Debug, thiserror::Error)]
+#[derive(Debug, thiserror::Error, EchoBusinessError)]
 pub enum ResourceUploadProtocolError {
     #[error(transparent)]
     StdIoError(#[from] std::io::Error),
@@ -162,7 +163,7 @@ impl Decoder for ResourceUploadProtocol {
     }
 }
 
-#[derive(Debug, thiserror::Error)]
+#[derive(Debug, thiserror::Error, EchoBusinessError)]
 pub enum UploadTrackerError {
     #[error(transparent)]
     StdIO(std::io::Error),
@@ -190,7 +191,7 @@ pub enum UploadTrackerError {
     UnexceptedResourceStreamEOF,
 }
 
-#[derive(Debug, thiserror::Error)]
+#[derive(Debug, thiserror::Error, EchoBusinessError)]
 #[non_exhaustive]
 pub enum ConsistencyViolationError {
     // mismatches

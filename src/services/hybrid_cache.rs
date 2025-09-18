@@ -5,6 +5,7 @@ use crate::services::hybrid_cache::dyn_cache::HybridDynCache;
 use crate::services::hybrid_cache::users::HybridUsersCache;
 use crate::services::states::EchoState;
 use crate::services::states::db::DataBaseError;
+use echo_macros::EchoBusinessError;
 use std::sync::Arc;
 
 pub struct HybridCacheService {
@@ -13,7 +14,7 @@ pub struct HybridCacheService {
     pub dyn_settings: HybridDynCache,
 }
 
-#[derive(Debug, thiserror::Error)]
+#[derive(Debug, thiserror::Error, EchoBusinessError)]
 pub enum HybridCacheError {
     #[error("Item not found")]
     ItemNotFound,

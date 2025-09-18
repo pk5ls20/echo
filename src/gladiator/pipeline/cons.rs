@@ -5,6 +5,7 @@ use crate::gladiator::ext_plugins::{
 use crate::gladiator::pipeline::GladiatorPipelineCons;
 use crate::gladiator::{ElementExtNode, GladiatorElement};
 use crate::services::states::EchoState;
+use echo_macros::EchoBusinessError;
 use html5ever::{ParseOpts, local_name, ns, parse_fragment};
 use markup5ever::tendril::TendrilSink;
 use markup5ever::{Attribute, LocalName, QualName};
@@ -14,7 +15,7 @@ use std::rc::Rc;
 use std::sync::Weak as WeakArc;
 use unicode_segmentation::UnicodeSegmentation;
 
-#[derive(Debug, Eq, PartialEq, thiserror::Error)]
+#[derive(Debug, Eq, PartialEq, thiserror::Error, EchoBusinessError)]
 pub enum IncomingCheckConsError {
     #[error("You do not have permission to upload this echo.")]
     PermissionDenied,

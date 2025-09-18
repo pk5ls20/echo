@@ -1,11 +1,12 @@
 //! ref: <https://github.com/dtolnay/case-studies/blob/master/autoref-specialization/README.md>
+use echo_macros::EchoBusinessError;
 use serde::Serialize;
 use serde::de::DeserializeOwned;
 use std::fmt::Display;
 use std::marker::PhantomData;
 use std::str::FromStr;
 
-#[derive(Debug, thiserror::Error)]
+#[derive(Debug, thiserror::Error, EchoBusinessError)]
 pub enum SmartStringError {
     #[error(transparent)]
     SerdeJsonError(serde_json::Error),
