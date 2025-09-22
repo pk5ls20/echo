@@ -170,9 +170,7 @@ where
             .extensions
             .get::<SessionHelper>()
             .cloned()
-            .ok_or(internal!(
-                "Cannot extract session. Is `SessionLayer` enabled?"
-            ))
+            .ok_or_else(|| internal!("Cannot extract session. Is `SessionLayer` enabled?"))
     }
 }
 

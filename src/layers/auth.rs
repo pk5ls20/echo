@@ -29,9 +29,9 @@ where
             .extensions
             .get::<BasicAuthData>()
             .cloned()
-            .ok_or(internal!(
-                "Cannot extract authed user info. Is `basic_auth_checker` enabled?"
-            ))
+            .ok_or_else(|| {
+                internal!("Cannot extract authed user info. Is `basic_auth_checker` enabled?")
+            })
     }
 }
 

@@ -40,9 +40,7 @@ where
             .extensions
             .get::<ClientInfo>()
             .cloned()
-            .ok_or(internal!(
-                "Cannot extract client info. Is `ClientInfoLayer` enabled?"
-            ))
+            .ok_or_else(|| internal!("Cannot extract client info. Is `ClientInfoLayer` enabled?"))
     }
 }
 

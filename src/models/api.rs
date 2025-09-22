@@ -62,7 +62,7 @@ impl ApiError {
         let err_user_msg = msg.map(|m| m.into()).unwrap_or_else(|| fallback_msg.into());
         let business_code = err.as_ref().and_then(|e| e.code());
         tracing::error!(
-            "An api error occurred! {:?}",
+            "An api error occurred! => {:?}",
             ApiEmitError {
                 msg: &err_user_msg,
                 business_code: &business_code,
