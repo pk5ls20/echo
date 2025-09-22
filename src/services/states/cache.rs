@@ -11,6 +11,7 @@ use std::marker::PhantomData;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 use time;
+use totp_rs::TOTP;
 use uuid::Uuid;
 
 #[derive(Debug, Clone)]
@@ -40,17 +41,22 @@ impl<K, V> Expiry<K, (MokaExpiration, V)> for EchoMokaExpiry {
 
 pub type MokaVal<V> = (MokaExpiration, V);
 
-fn build_cache<K, V>() -> Cache<K, MokaVal<V>>
+fn build_cache<K, V>(max_capacity: Option<u64>) -> Cache<K, MokaVal<V>>
 where
     K: Clone + Eq + Hash + Send + Sync + Debug + 'static,
     V: Clone + Send + Sync + 'static,
 {
-    Cache::builder()
+    let builder = Cache::builder()
         .expire_after(EchoMokaExpiry)
         .eviction_listener(|key: Arc<K>, _value: MokaVal<V>, cause: RemovalCause| {
             tracing::trace!("Evicted key: {:?}, cause: {:?}", &*key, &cause);
-        })
-        .build()
+        });
+    let builder = if let Some(c) = max_capacity {
+        builder.max_capacity(c)
+    } else {
+        builder
+    };
+    builder.build()
 }
 
 pub struct Raw;
@@ -85,8 +91,12 @@ where
     V: Clone + Send + Sync + 'static,
 {
     pub fn new() -> Self {
+        Self::new_with_capacity(None)
+    }
+
+    pub fn new_with_capacity(max_capacity: Option<u64>) -> Self {
         Self {
-            inner: build_cache::<K, V>(),
+            inner: build_cache::<K, V>(max_capacity),
             _pd: PhantomData,
         }
     }
@@ -136,8 +146,12 @@ where
     V: Clone + Send + Sync + 'static,
 {
     pub fn new() -> Self {
+        Self::new_with_capacity(None)
+    }
+
+    pub fn new_with_capacity(max_capacity: Option<u64>) -> Self {
         Self {
-            inner: build_cache::<String, V>(),
+            inner: build_cache::<String, V>(max_capacity),
             _pd: PhantomData,
         }
     }
@@ -202,7 +216,11 @@ where
 
 macro_rules! define_moka_cache {
     ( $( $name:ident => {
-            tk: $kty:ty, ty: $vty:ty, key_constraint: $kc:tt $(,)?
+            tk: $kty:ty,
+            ty: $vty:ty,
+            key_constraint: $kc:tt
+            $(, max_size: $cap:expr)?
+            $(,)?
         } )* ) => {
         paste! {
             pub struct CacheState {
@@ -215,7 +233,10 @@ macro_rules! define_moka_cache {
                 pub fn new() -> Self {
                     Self {
                         $(
-                            [<inner_ $name>]: define_moka_cache!(@field_new $kty, $vty, $kc),
+                            [<inner_ $name>]: define_moka_cache!(
+                                @field_new $kty, $vty, $kc,
+                                define_moka_cache!(@cap $( $cap )?)
+                            ),
                         )*
                     }
                 }
@@ -234,11 +255,18 @@ macro_rules! define_moka_cache {
         }
     };
 
+    (@cap $cap:expr) => { $cap };
+    (@cap) => { None };
+
     (@field_ty $kty:ty, $vty:ty, true)  => { GroupCache<$kty, $vty, Namespaced> };
     (@field_ty $kty:ty, $vty:ty, false) => { GroupCache<$kty, $vty, Raw> };
 
-    (@field_new $kty:ty, $vty:ty, true)  => { GroupCache::<$kty, $vty, Namespaced>::new() };
-    (@field_new $kty:ty, $vty:ty, false) => { GroupCache::<$kty, $vty, Raw>::new() };
+    (@field_new $kty:ty, $vty:ty, true,  $cap:expr) => {
+        GroupCache::<$kty, $vty, Namespaced>::new_with_capacity($cap)
+    };
+    (@field_new $kty:ty, $vty:ty, false, $cap:expr) => {
+        GroupCache::<$kty, $vty, Raw>::new_with_capacity($cap)
+    };
 
     (@methods
         [field: $field:ident]
@@ -317,22 +345,32 @@ define_moka_cache! {
     passkey_reg_session => {
         tk: String,
         ty: Bytes,
-        key_constraint: true
+        key_constraint: true,
+        max_size: Some(10)
     }
     passkey_auth_session => {
         tk: String,
         ty: Bytes,
-        key_constraint: true
+        key_constraint: true,
+        max_size: Some(10)
     }
     upload_tracker_session => {
         tk: Uuid,
         ty: Arc<UploadTracker>,
-        key_constraint: false
+        key_constraint: false,
+        max_size: Some(10)
     }
     res_sign => {
         tk: String,
         ty: Uuid,
-        key_constraint: false
+        key_constraint: false,
+        max_size: Some(100)
+    }
+    totp_flow => {
+        tk: Uuid,
+        ty: Arc<TOTP>,
+        key_constraint: false,
+        max_size: Some(10)
     }
 }
 

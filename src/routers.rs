@@ -2,8 +2,8 @@ use crate::echo_layer_builder;
 use crate::routers::echo::{add_echo, delete_echo, list_echo, modify_echo};
 use crate::routers::invite_code::{create_invite_code, list_invite_codes, revoke_invite_code};
 use crate::routers::mfa::{
-    get_mfa_infos, get_mfa_op_logs, totp_delete, totp_list, totp_setup, totp_verify,
-    webauthn_auth_finish, webauthn_auth_start, webauthn_delete, webauthn_list,
+    get_mfa_infos, get_mfa_op_logs, totp_delete, totp_list, totp_setup_finish, totp_setup_start,
+    totp_verify, webauthn_auth_finish, webauthn_auth_start, webauthn_delete, webauthn_list,
     webauthn_setup_finish, webauthn_setup_start,
 };
 use crate::routers::permission::{
@@ -98,7 +98,8 @@ pub async fn router(state: Arc<EchoState>) -> Router {
             .nest(
                 "/totp",
                 Router::new()
-                    .route("/setup", post(totp_setup))
+                    .route("/setup/start", post(totp_setup_start))
+                    .route("/setup/finish", post(totp_setup_finish))
                     .route("/verify", post(totp_verify))
                     .layer(basic_layer())
                     .merge(

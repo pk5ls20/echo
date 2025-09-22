@@ -10,6 +10,7 @@ use crate::models::users::Role;
 use crate::services::hybrid_cache::HybridCacheService;
 use crate::services::mfa::MFAService;
 use crate::services::states::EchoState;
+use crate::services::states::cache::MokaExpiration;
 use crate::services::states::db::{
     DataBaseError, EchoDatabaseExecutor, PageQueryBinder, PageQueryResult,
 };
@@ -17,19 +18,18 @@ use axum::Json;
 use axum::extract::{Query, State};
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
-use time::OffsetDateTime;
-use totp_rs::TOTP;
+use time::{Duration, OffsetDateTime};
 use webauthn_rs::prelude::*;
 
 pub type MFARouterState = State<(Arc<EchoState>, Arc<MFAService>, Arc<HybridCacheService>)>;
 
 #[derive(Debug, Serialize)]
 pub struct TotpSetupRes {
+    totp_sess: Uuid,
     totp_uri: String,
 }
 
-pub async fn totp_setup(
-    client_info: ClientInfo,
+pub async fn totp_setup_start(
     current_user_info: BasicAuthData,
     State((state, mfa_service, cache)): MFARouterState,
 ) -> ApiResult<Json<GeneralResponse<TotpSetupRes>>> {
@@ -39,10 +39,9 @@ pub async fn totp_setup(
         .get_user_by_user_id(current_user_info.user_id)
         .await
         .map_err(|e| internal!(e, "Failed to fetch user"))?;
-    // TODO: RustRover cannot infer the type here, so fxxk u jetbrains!
-    let totp: TOTP = state
+    state
         .db
-        .transaction(async |mut exec: EchoDatabaseExecutor<'_>| {
+        .single(async |mut exec: EchoDatabaseExecutor<'_>| {
             if let Some(info) = exec
                 .mfa()
                 .list_user_totp_credential(current_user_id)
@@ -54,11 +53,61 @@ pub async fn totp_setup(
                     info.created_at, info.last_used_at
                 )));
             }
-            let totp = mfa_service
-                .generate_totp(current_user.username.clone())
-                .map_err(|e| internal!(e, "Failed to generate TOTP"))?;
+            Ok(())
+        })
+        .await?;
+    let totp = Arc::new(
+        mfa_service
+            .generate_totp(current_user.username.clone())
+            .map_err(|e| internal!(e, "Failed to generate TOTP"))?,
+    );
+    let totp_sess = Uuid::new_v4();
+    state
+        .cache
+        .set_totp_flow(
+            totp_sess.clone(),
+            (MokaExpiration::new(Duration::minutes(5)), totp.clone()),
+        )
+        .await;
+    Ok(general_json_res!(
+        "TOTP created",
+        TotpSetupRes {
+            totp_uri: totp.get_url(),
+            totp_sess,
+        }
+    ))
+}
+
+#[derive(Debug, Deserialize)]
+pub struct TotpFinishReq {
+    totp_sess: Uuid,
+    code: String,
+}
+
+pub async fn totp_setup_finish(
+    client_info: ClientInfo,
+    current_user_info: BasicAuthData,
+    State((state, mfa_service, _)): MFARouterState,
+    Json(req): Json<TotpFinishReq>,
+) -> ApiResult<Json<GeneralResponse<()>>> {
+    let (_, totp) = state
+        .cache
+        .get_totp_flow(req.totp_sess)
+        .await
+        .ok_or(bad_request!(
+            "TOTP setup session not found or expired, please start over"
+        ))?;
+    let current = totp
+        .generate_current()
+        .map_err(|e| internal!(e, "Failed to generate current TOTP from cached secret"))?;
+    if current != req.code {
+        return Err(bad_request!("Invalid TOTP code"));
+    }
+    state
+        .db
+        .transaction(async |mut exec: EchoDatabaseExecutor<'_>| {
             let cred = mfa_service
-                .save_totp(current_user_id, &totp)
+                .save_totp(current_user_info.user_id, &totp)
                 .map_err(|e| internal!(e, "Failed to serialize TOTP"))?;
             exec.mfa()
                 .insert_totp_credential(cred, client_info.ip_address, client_info.user_agent)
@@ -68,15 +117,10 @@ pub async fn totp_setup(
                 .enable_mfa(current_user_info.user_id)
                 .await
                 .map_err(|e| internal!(e, "Failed to enable mfa"))?;
-            Ok(totp)
+            Ok::<_, ApiError>(())
         })
         .await?;
-    Ok(general_json_res!(
-        "TOTP created",
-        TotpSetupRes {
-            totp_uri: totp.get_url(),
-        }
-    ))
+    Ok(general_json_res!("TOTP configured successfully"))
 }
 
 #[derive(Debug, Deserialize)]

@@ -38,6 +38,16 @@ pub struct ApiError {
 
 pub type ApiResult<T> = Result<T, ApiError>;
 
+#[derive(Debug)]
+struct ApiEmitError<'a, E>
+where
+    E: std::error::Error + EchoBusinessErrCode,
+{
+    msg: &'a str,
+    business_code: &'a Option<u32>,
+    error: &'a Option<E>,
+}
+
 impl ApiError {
     fn api_error_inner<E, T>(
         status: StatusCode,
@@ -51,14 +61,14 @@ impl ApiError {
     {
         let err_user_msg = msg.map(|m| m.into()).unwrap_or_else(|| fallback_msg.into());
         let business_code = err.as_ref().and_then(|e| e.code());
-        let mut err_emit_msg = format!(
-            "An api error occurred!\nmsg: {}\nbusiness_code: {:?}",
-            &err_user_msg, &business_code
+        tracing::error!(
+            "An api error occurred! {:?}",
+            ApiEmitError {
+                msg: &err_user_msg,
+                business_code: &business_code,
+                error: &err,
+            }
         );
-        if let Some(err) = err {
-            err_emit_msg.push_str(&format!("\nerror: {}", err));
-            tracing::error!("{}\nStack: {:?}", &err_emit_msg, &err);
-        }
         Self {
             status,
             code: business_code,
