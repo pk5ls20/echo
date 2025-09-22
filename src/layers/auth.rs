@@ -48,18 +48,6 @@ pub async fn basic_auth_checker(
     Ok(next.run(request).await)
 }
 
-pub async fn pre_mfa_auth_checker(
-    session: SessionHelper,
-    request: AxumExtractRequest,
-    next: Next,
-) -> ApiResult<impl IntoResponse> {
-    let auth = session.extract_pre_mfa_auth()?;
-    if let (true, false) = (auth.inner.need_login_mfa, auth.inner.passed_login_mfa) {
-        return Err(unauthorized!("MFA required"));
-    }
-    Ok(next.run(request).await)
-}
-
 pub async fn mfa_auth_checker(
     session: SessionHelper,
     request: AxumExtractRequest,

@@ -154,9 +154,6 @@ pub async fn totp_verify(
         })
         .await?;
     session
-        .sign_pre_mfa(true, true)
-        .map_err(|e| internal!(e, "Failed to sign pre-MFA auth session in TOTP verify"))?;
-    session
         .sign_mfa()
         .map_err(|e| internal!(e, "Failed to sign MFA session"))?;
     Ok(general_json_res!("MFA verified"))
@@ -408,9 +405,6 @@ pub async fn webauthn_auth_finish(
     session
         .sign_mfa()
         .map_err(|e| internal!(e, "Failed to sign MFA session"))?;
-    session
-        .sign_pre_mfa(true, true)
-        .map_err(|e| internal!(e, "Failed to sign pre-MFA auth session in webauthn verify"))?;
     Ok(general_json_res!("MFA verified"))
 }
 

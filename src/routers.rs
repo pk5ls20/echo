@@ -62,8 +62,7 @@ pub async fn router(state: Arc<EchoState>) -> Router {
     let echo_baker_service = Arc::new(EchoBaker::new());
     let raw_layer = echo_layer_builder!(state);
     let basic_layer = echo_layer_builder!(state, b);
-    let partial_mfa_layer = echo_layer_builder!(state, b, pm);
-    let full_mfa_layer = echo_layer_builder!(state, b, pm, m);
+    let full_mfa_layer = echo_layer_builder!(state, b, m);
     let user_router = {
         Router::new()
             .merge(
@@ -75,7 +74,7 @@ pub async fn router(state: Arc<EchoState>) -> Router {
             .merge(
                 Router::new()
                     .route("/info", get(fetch_user_info))
-                    .layer(partial_mfa_layer()),
+                    .layer(basic_layer()),
             )
             .merge(
                 Router::new()

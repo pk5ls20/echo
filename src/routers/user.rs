@@ -149,12 +149,14 @@ pub async fn user_login(
                 "Failed to sign basic auth session after user registration"
             )
         })?;
-    session.sign_pre_mfa(need_mfa, false).map_err(|e| {
-        internal!(
-            e,
-            "Failed to sign pre-MFA auth session after user registration"
-        )
-    })?;
+    if need_mfa {
+        session.sign_pre_mfa().map_err(|e| {
+            internal!(
+                e,
+                "Failed to sign pre-MFA auth session after user registration"
+            )
+        })?;
+    }
     Ok(general_json_res!(
         "User logged in successfully",
         UserLoginRes { need_mfa }

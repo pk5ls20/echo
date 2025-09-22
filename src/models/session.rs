@@ -40,26 +40,13 @@ impl BasicAuthData {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct PreMfaAuthData {
-    pub need_login_mfa: bool,
-    pub passed_login_mfa: bool,
-}
-
-impl PreMfaAuthData {
-    pub fn new(need_login_mfa: bool, passed_login_mfa: bool) -> Self {
-        Self {
-            need_login_mfa,
-            passed_login_mfa,
-        }
-    }
-}
-
 pub type BasicAuthSessionData = BaseSession<BasicAuthData>;
 
 pub type CsrfAuthData = ();
 
 pub type CsrfAuthSessionData = BaseSession<CsrfAuthData>;
+
+pub type PreMfaAuthData = ();
 
 pub type PreMfaAuthSessionData = BaseSession<PreMfaAuthData>;
 

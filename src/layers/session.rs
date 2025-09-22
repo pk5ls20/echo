@@ -84,8 +84,8 @@ impl SessionHelper {
         Ok(())
     }
 
-    pub fn sign_pre_mfa(&self, need_login_mfa: bool, passed_login_mfa: bool) -> SessionResult<()> {
-        self.sign_pre_mfa_auth(PreMfaAuthData::new(need_login_mfa, passed_login_mfa))
+    pub fn sign_pre_mfa(&self) -> SessionResult<()> {
+        self.sign_pre_mfa_auth(())
     }
 
     pub fn sign_mfa(&self) -> SessionResult<()> {
