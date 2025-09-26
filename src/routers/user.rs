@@ -104,7 +104,8 @@ pub struct UserLoginReq {
 
 #[derive(Debug, Serialize)]
 pub struct UserLoginRes {
-    pub need_mfa: bool,
+    user_id: i64,
+    need_mfa: bool,
 }
 
 pub async fn user_login(
@@ -159,7 +160,10 @@ pub async fn user_login(
     }
     Ok(general_json_res!(
         "User logged in successfully",
-        UserLoginRes { need_mfa }
+        UserLoginRes {
+            user_id: user.inner.id,
+            need_mfa
+        }
     ))
 }
 

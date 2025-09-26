@@ -85,6 +85,7 @@ pub struct TotpFinishReq {
 }
 
 pub async fn totp_setup_finish(
+    session: SessionHelper,
     client_info: ClientInfo,
     current_user_info: BasicAuthData,
     State((state, mfa_service, _)): MFARouterState,
@@ -120,6 +121,9 @@ pub async fn totp_setup_finish(
             Ok::<_, ApiError>(())
         })
         .await?;
+    session
+        .sign_pre_mfa()
+        .map_err(|e| internal!(e, "Failed to sign pre-MFA auth session after setup TOTP"))?;
     Ok(general_json_res!("TOTP configured successfully"))
 }
 
@@ -318,6 +322,7 @@ pub async fn webauthn_setup_start(
 }
 
 pub async fn webauthn_setup_finish(
+    session: SessionHelper,
     current_user_info: BasicAuthData,
     client_info: ClientInfo,
     State((state, mfa_service, cache)): MFARouterState,
@@ -350,6 +355,12 @@ pub async fn webauthn_setup_finish(
             Ok::<_, ApiError>(())
         })
         .await?;
+    session.sign_pre_mfa().map_err(|e| {
+        internal!(
+            e,
+            "Failed to sign pre-MFA auth session after setup webauthn"
+        )
+    })?;
     Ok(general_json_res!("Passkey registered"))
 }
 
