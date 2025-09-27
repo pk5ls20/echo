@@ -1,3 +1,4 @@
+use crate::models::resource::ResourceTarget;
 use crate::models::users::{Role, UserRow, UserRowOptional};
 use crate::services::states::db::{DataBaseResult, SqliteBaseResultExt};
 use sqlx::{Executor, Sqlite, query, query_as, query_scalar};
@@ -81,6 +82,36 @@ where
         .execute(&mut *self.inner)
         .await
         .resolve()?;
+        if let Some(id) = update_user.avatar_res_id {
+            self.link_user_avatar_res(id, update_user.id).await?;
+        }
+        Ok(())
+    }
+
+    async fn link_user_avatar_res(
+        &mut self,
+        res_id: Option<i64>,
+        user_id: i64,
+    ) -> DataBaseResult<()> {
+        query!(
+            "DELETE FROM resource_references WHERE target_id = ? AND target_type = ?",
+            user_id,
+            ResourceTarget::Avatar
+        )
+        .execute(&mut *self.inner)
+        .await
+        .resolve()?;
+        if let Some(res_id) = res_id {
+            query!(
+                "INSERT INTO resource_references (res_id, target_id, target_type) VALUES (?, ?, ?)",
+                res_id,
+                user_id,
+                ResourceTarget::Avatar
+            )
+            .execute(&mut *self.inner)
+            .await
+            .resolve()?;
+        }
         Ok(())
     }
 

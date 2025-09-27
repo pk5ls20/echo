@@ -27,6 +27,7 @@ figment = { version = "0.10.19", features = ["env", "toml"] }
 frunk = "0.4.4"
 futures = "0.3.31"
 hex = "0.4.3"
+hmac = "0.12.1"
 html5ever = "0.35.0"
 infer = "0.19.0"
 leptos = { version = "0.8.9", features = ["ssr", "nightly"] }
@@ -43,15 +44,18 @@ prost = "0.14.1"
 rand = { version = "0.9.2", features = ["std"] }
 rmp-serde = "1.3.0"
 rpassword = { version = "7.4.0", optional = true }
-scc = "3.0.7"
-serde = "1.0.226"
-serde-inline-default = "0.2.3"
+scc = "3.1.2"
+serde = "1.0.227"
+serde-inline-default = "1.0.0"
 serde_json = "1.0.145"
-sha1 = "0.11.0-rc.2"
+serde_urlencoded = "0.7.1"
+serde_with = { version = "3.14.1", features = ["base64"] }
+sha1 = "0.10.6"
+sha2 = "0.10.9"
 shadow-rs = { version = "1.3.0", default-features = false }
 smallvec = "1.15.1"
 sqlx = { version = "0.8.6", features = ["runtime-tokio", "sqlite", "macros", "time", "json", "uuid"] }
-tempfile = "3.21.0"
+tempfile = "3.23.0"
 thiserror = "2.0.16"
 time = { version = "0.3.44", features = ["serde"] }
 tokio = { version = "1.47.1", features = ["rt", "rt-multi-thread", "macros", "net", "signal", "fs", "test-util", "parking_lot"] }
@@ -59,7 +63,7 @@ tokio-util = { version = "0.7.16", features = ["codec", "io"] }
 totp-rs = { version = "5.7.0", features = ["qr", "serde_support"] }
 tower = { version = "0.5.2", features = ["limit"] }
 tower-cookies = { version = "0.11.0", features = ["private"] }
-tower-http = { version = "0.6.6", features = ["trace", "request-id"] }
+tower-http = { version = "0.6.6", features = ["trace", "request-id", "fs"] }
 tracing = "0.1.41"
 tracing-subscriber = { version = "0.3.20", features = ["env-filter", "parking_lot"] }
 unicode-segmentation = "1.12.0"

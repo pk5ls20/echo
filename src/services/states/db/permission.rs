@@ -18,8 +18,8 @@ impl<'a, E> PermissionRepo<'a, E>
 where
     for<'c> &'c mut E: Executor<'c, Database = Sqlite>,
 {
-    pub async fn add_permission(&mut self, pm_desc: &str, pm_color: i64) -> DataBaseResult<()> {
-        query!(
+    pub async fn add_permission(&mut self, pm_desc: &str, pm_color: i64) -> DataBaseResult<i64> {
+        let res = query!(
             "INSERT INTO permissions (description, color) VALUES (?, ?)",
             pm_desc,
             pm_color,
@@ -27,7 +27,7 @@ where
         .execute(&mut *self.inner)
         .await
         .resolve()?;
-        Ok(())
+        Ok(res.last_insert_rowid())
     }
 
     pub async fn modify_permission(

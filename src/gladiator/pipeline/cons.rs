@@ -15,7 +15,7 @@ use std::rc::Rc;
 use std::sync::Weak as WeakArc;
 use unicode_segmentation::UnicodeSegmentation;
 
-#[derive(Debug, Eq, PartialEq, thiserror::Error, EchoBusinessError)]
+#[derive(Debug, thiserror::Error, EchoBusinessError)]
 pub enum IncomingCheckConsError {
     #[error("You do not have permission to upload this echo.")]
     PermissionDenied,
@@ -215,23 +215,33 @@ impl GladiatorPipelineCons for OutGoingEchoFilterCons {
     }
 }
 
+pub struct OutGoingEchoSSRConsCtx {
+    pub user_id: i64,
+}
+
 /// Perform SSR rendering on the `ext` portion of the output echo.
 /// ## Interior mutability **(Unsafe)**
 /// Will add the rendered content to the DOM tree
 pub struct OutGoingEchoSSRCons {
-    ctx: WeakArc<EchoState>,
+    state: WeakArc<EchoState>,
+    ctx: OutGoingEchoSSRConsCtx,
     error: Option<EchoExtError>,
 }
 
 impl OutGoingEchoSSRCons {
-    pub fn new(ctx: WeakArc<EchoState>) -> Self {
-        Self { ctx, error: None }
+    pub fn new(state: WeakArc<EchoState>, user_id: i64) -> Self {
+        Self {
+            state,
+            ctx: OutGoingEchoSSRConsCtx { user_id },
+            error: None,
+        }
     }
 
     #[cfg(test)]
-    pub fn new_with_dummy_ctx() -> Self {
+    pub fn new_with_dummy_state(user_id: i64) -> Self {
         Self {
-            ctx: WeakArc::new(),
+            state: WeakArc::new(),
+            ctx: OutGoingEchoSSRConsCtx { user_id },
             error: None,
         }
     }
@@ -248,7 +258,11 @@ impl OutGoingEchoSSRCons {
 }
 
 impl OutGoingEchoSSRCons {
-    fn render<'a>(ctx: WeakArc<EchoState>, node: &'a ElementExtNode<'a>) -> EchoExtResult<()> {
+    fn render<'a>(
+        state: WeakArc<EchoState>,
+        ctx: &OutGoingEchoSSRConsCtx,
+        node: &'a ElementExtNode<'a>,
+    ) -> EchoExtResult<()> {
         let (_, attrs) = node.inner.split();
         let attrs = attrs.borrow();
         // first, we need check if echo-ext-fuzz-hw exists
@@ -259,8 +273,8 @@ impl OutGoingEchoSSRCons {
         let ext_id = node
             .ext_id
             .as_ref()
-            .map_err(|_| EchoExtError::ExtIdTransUsizeError)?;
-        let rendered_html = render(*ext_id, ctx, &attrs)?;
+            .map_err(|_| EchoExtError::ExtIdTransUsize)?;
+        let rendered_html = render(*ext_id, state, ctx, &attrs)?;
         tracing::debug!("Output => id: {}, html: {}", ext_id, &rendered_html);
         let frag_dom = parse_fragment(
             RcDom::default(),
@@ -286,7 +300,7 @@ impl GladiatorPipelineCons for OutGoingEchoSSRCons {
         match elem {
             GladiatorElement::Extended(node)
                 if self.error.is_none()
-                    && let Err(e) = Self::render(self.ctx.clone(), node) =>
+                    && let Err(e) = Self::render(self.state.clone(), &self.ctx, node) =>
             {
                 self.error = Some(e);
             }

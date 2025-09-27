@@ -187,6 +187,7 @@ pub async fn list_echo(
                 true => Some(baker.post_inner_echo(
                     Arc::downgrade(&state),
                     it.content.as_deref().unwrap(),
+                    current_user_info.user_id,
                     &current_user.permission_ids,
                     EchoBaker::all_ext_ids(),
                 )?),

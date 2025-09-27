@@ -57,7 +57,7 @@ impl HybridUsersCache {
         let user_id = updated_user.id;
         self.state
             .db
-            .single(async |mut exec: EchoDatabaseExecutor<'_>| {
+            .transaction(async |mut exec: EchoDatabaseExecutor<'_>| {
                 exec.users().update_user(updated_user).await
             })
             .await?;

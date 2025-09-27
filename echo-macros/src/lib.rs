@@ -77,7 +77,7 @@ pub fn echo_ext(input: TokenStream) -> TokenStream {
 
     fields.iter().for_each(|f| {
         let ident = f.ident.as_ref().unwrap();
-        let field_name = ident.to_string();
+        let field_name = ident.to_string().replace('_', "-");
         let has_skip = f
             .attrs
             .iter()
@@ -225,7 +225,7 @@ pub fn derive_echo_err_code(input: TokenStream) -> TokenStream {
             let guard_ident =
                 format_ident!("__ECHO_ERR_CODE_GUARD__{}_{}_{}", ident, v_ident, code);
             let guard_export_name =
-                syn::LitStr::new(&format!("__echo_err_code__{}", code), Span::call_site());
+                LitStr::new(&format!("__echo_err_code__{}", code), Span::call_site());
             guards.push(quote! {
                 #[doc(hidden)]
                 #[used]
@@ -240,6 +240,7 @@ pub fn derive_echo_err_code(input: TokenStream) -> TokenStream {
 
     let biz_trait: syn::Path = parse_quote!(crate::errors::EchoBusinessErrCode);
     let expanded = quote! {
+        #[automatically_derived]
         impl #impl_generics #biz_trait for #ident #ty_generics #where_clause {
             fn code(&self) -> Option<u32> {
                 match self {

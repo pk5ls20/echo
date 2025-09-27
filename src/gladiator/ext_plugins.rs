@@ -1,5 +1,6 @@
+use crate::gladiator::pipeline::cons::OutGoingEchoSSRConsCtx;
+use crate::services::res_manager::{ResManagerService, ResManagerServiceError};
 use crate::services::states::EchoState;
-use crate::services::states::cache::MokaExpiration;
 use abv::bv2av;
 use echo_macros::{EchoBusinessError, EchoExt};
 use leptos::prelude::*;
@@ -7,15 +8,14 @@ use markup5ever::Attribute;
 use std::cell::Ref;
 use std::sync::Weak as WeakArc;
 use time::Duration;
-use uuid::Uuid;
 
 // TODO: zero-copy error key display
-#[derive(Debug, Eq, PartialEq, thiserror::Error, EchoBusinessError)]
+#[derive(Debug, thiserror::Error, EchoBusinessError)]
 pub enum EchoExtError {
     #[error("Failed to upgrade weak arc")]
-    ArcUpgradeError,
+    ArcUpgrade,
     #[error("Failed to convert extension id to usize")]
-    ExtIdTransUsizeError,
+    ExtIdTransUsize,
     #[error("Fragment dom missing child")]
     FragDomMissingChild,
     #[error("Unknown extension id: {0}")]
@@ -25,7 +25,9 @@ pub enum EchoExtError {
     #[error("Evaluate key exist: {0}")]
     EvaluateKeyExist(String),
     #[error("Custom validation error! key: {0}, err: {1}")]
-    CustomValidationError(String, &'static str),
+    CustomValidation(String, &'static str),
+    #[error(transparent)]
+    ResManagerService(#[from] ResManagerServiceError),
 }
 
 pub type EchoExtResult<T> = Result<T, EchoExtError>;
@@ -87,13 +89,17 @@ pub(super) trait EchoExtHandler<'a>: EchoExtMeta {
         Ok(())
     }
 
-    fn extract(ctx: WeakArc<EchoState>, attr: &'a Ref<'a, Vec<Attribute>>) -> EchoExtResult<Self>
+    fn extract(
+        state: WeakArc<EchoState>,
+        ctx: &OutGoingEchoSSRConsCtx,
+        attr: &'a Ref<'a, Vec<Attribute>>,
+    ) -> EchoExtResult<Self>
     where
         Self: Sized;
 }
 
 pub(super) trait EchoExtRender<'a>: EchoExtHandler<'a> {
-    fn render(&self) -> impl IntoView;
+    fn render(self) -> impl IntoView;
 }
 
 #[derive(Debug, EchoExt)]
@@ -101,36 +107,31 @@ pub(super) trait EchoExtRender<'a>: EchoExtHandler<'a> {
 pub(super) struct EchoResourceExt<'a> {
     res_id: &'a str,
     #[eval]
-    res_sign: Uuid,
+    res_url: String,
 }
 
 impl<'a> EchoExtHandler<'a> for EchoResourceExt<'a> {
-    fn extract(ctx: WeakArc<EchoState>, attr: &'a Ref<'a, Vec<Attribute>>) -> EchoExtResult<Self> {
+    fn extract(
+        state: WeakArc<EchoState>,
+        ctx: &OutGoingEchoSSRConsCtx,
+        attr: &'a Ref<'a, Vec<Attribute>>,
+    ) -> EchoExtResult<Self> {
         let res_id = Self::get_meta_from_attr(attr, "res-id")?;
-        let res_sign = Uuid::new_v4();
-        // This is counterintuitive (and likely performs poorly with poor semantics).
-        // I think it's time we switch to a synchronous cache to avoid this.
-        // FIXME: Replace the asynchronous cache with a synchronous version.
-        tokio::spawn({
-            let res_id = res_id.to_string();
-            let ctx = ctx.upgrade().ok_or(EchoExtError::ArcUpgradeError)?;
-            async move {
-                ctx.cache
-                    .set_res_sign(
-                        res_id,
-                        (MokaExpiration::new(Duration::minutes(5)), res_sign),
-                    )
-                    .await;
-            }
-        });
-        Ok(Self { res_id, res_sign })
+        let res_id_int = res_id
+            .parse::<i64>()
+            .map_err(|_| EchoExtError::CustomValidation(res_id.to_string(), "not a valid id"))?;
+        let state = state.upgrade().ok_or(EchoExtError::ArcUpgrade)?;
+        let res_manager = ResManagerService::new(state);
+        let res_url = res_manager
+            .sign(ctx.user_id, Duration::minutes(10), res_id_int)?
+            .to_url(None)?;
+        Ok(Self { res_id, res_url })
     }
 }
 
 impl<'a> EchoExtRender<'a> for EchoResourceExt<'a> {
-    fn render(&self) -> impl IntoView {
-        let src = format!("/api/v1/resource?id={}&qwq={}", self.res_id, self.res_sign);
-        view! { <img src=src /> }
+    fn render(self) -> impl IntoView {
+        view! { <img src=self.res_url /> }
     }
 }
 
@@ -168,7 +169,7 @@ impl<'a> EchoExtHandler<'a> for BiliVideoExt<'a> {
     fn custom_validate_attr(attr: &'a Ref<'a, Vec<Attribute>>) -> EchoExtResult<()> {
         let vid = Self::get_meta_from_attr(attr, "vid")?;
         if Self::av_or_bv(vid).is_none() {
-            return Err(EchoExtError::CustomValidationError(
+            return Err(EchoExtError::CustomValidation(
                 vid.to_string(),
                 "not a valid av/bv id",
             ));
@@ -176,16 +177,20 @@ impl<'a> EchoExtHandler<'a> for BiliVideoExt<'a> {
         Ok(())
     }
 
-    fn extract(_: WeakArc<EchoState>, attr: &'a Ref<'a, Vec<Attribute>>) -> EchoExtResult<Self> {
+    fn extract(
+        _: WeakArc<EchoState>,
+        _: &OutGoingEchoSSRConsCtx,
+        attr: &'a Ref<'a, Vec<Attribute>>,
+    ) -> EchoExtResult<Self> {
         let vid = Self::get_meta_from_attr(attr, "vid")?;
-        let vid_enum = Self::av_or_bv(vid).ok_or(EchoExtError::CustomValidationError(
+        let vid_enum = Self::av_or_bv(vid).ok_or(EchoExtError::CustomValidation(
             vid.to_string(),
             "not a valid av/bv id",
         ))?;
         let av_id = match vid_enum {
             BiliVid::AV(id) => id,
             BiliVid::BV(bv) => bv2av(bv).map_err(|_| {
-                EchoExtError::CustomValidationError(bv.to_string(), "failed to convert bv to av")
+                EchoExtError::CustomValidation(bv.to_string(), "failed to convert bv to av")
             })?,
         };
         let autoplay = Self::get_meta_from_attr(attr, "autoplay")
@@ -204,7 +209,7 @@ impl<'a> EchoExtHandler<'a> for BiliVideoExt<'a> {
 }
 
 impl<'a> EchoExtRender<'a> for BiliVideoExt<'a> {
-    fn render(&self) -> impl IntoView {
+    fn render(self) -> impl IntoView {
         let player = match self.simple {
             true => "//bilibili.com/blackboard/html5mobileplayer.html",
             false => "//player.bilibili.com/player.html",
@@ -237,11 +242,15 @@ pub(super) struct NetEaseMusicExt {
 }
 
 impl<'a> EchoExtHandler<'a> for NetEaseMusicExt {
-    fn extract(_: WeakArc<EchoState>, attr: &'a Ref<'a, Vec<Attribute>>) -> EchoExtResult<Self> {
+    fn extract(
+        _: WeakArc<EchoState>,
+        _: &OutGoingEchoSSRConsCtx,
+        attr: &'a Ref<'a, Vec<Attribute>>,
+    ) -> EchoExtResult<Self> {
         let id_str = Self::get_meta_from_attr(attr, "id")?;
-        let id = id_str.parse::<u64>().map_err(|_| {
-            EchoExtError::CustomValidationError(id_str.to_string(), "not a valid id")
-        })?;
+        let id = id_str
+            .parse::<u64>()
+            .map_err(|_| EchoExtError::CustomValidation(id_str.to_string(), "not a valid id"))?;
         let autoplay = Self::get_meta_from_attr(attr, "autoplay")
             .map(|v| v.eq_ignore_ascii_case("true"))
             .unwrap_or(false);
@@ -250,7 +259,7 @@ impl<'a> EchoExtHandler<'a> for NetEaseMusicExt {
 }
 
 impl<'a> EchoExtRender<'a> for NetEaseMusicExt {
-    fn render(&self) -> impl IntoView {
+    fn render(self) -> impl IntoView {
         let mut ext = String::with_capacity(8);
         match self.autoplay {
             true => ext.push_str("&auto=1"),
@@ -287,12 +296,13 @@ macro_rules! echo_ext_dispatch {
 
         pub fn render<'a>(
             id: u32,
-            ctx: WeakArc<$crate::services::states::EchoState>,
+            state: WeakArc<$crate::services::states::EchoState>,
+            ctx: &$crate::gladiator::pipeline::cons::OutGoingEchoSSRConsCtx,
             attr: &'a ::std::cell::Ref<'a, ::std::vec::Vec<markup5ever::Attribute>>,
         ) -> EchoExtResult<String> {
             match id {
                 $(
-                    < $ty as EchoExtMeta >::ID => Ok(< $ty as EchoExtHandler<'a> >::extract(ctx, attr)?
+                    < $ty as EchoExtMeta >::ID => Ok(< $ty as EchoExtHandler<'a> >::extract(state, ctx, attr)?
                             .render()
                             .to_html()),
                 )+

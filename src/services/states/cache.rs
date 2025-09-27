@@ -216,11 +216,11 @@ where
 
 macro_rules! define_moka_cache {
     ( $( $name:ident => {
+            vis: $vis:vis,
             tk: $kty:ty,
             ty: $vty:ty,
-            key_constraint: $kc:tt
-            $(, max_size: $cap:expr)?
-            $(,)?
+            key_constraint: $kc:tt,
+            max_size: $cap:expr $(,)?
         } )* ) => {
         paste! {
             pub struct CacheState {
@@ -233,10 +233,8 @@ macro_rules! define_moka_cache {
                 pub fn new() -> Self {
                     Self {
                         $(
-                            [<inner_ $name>]: define_moka_cache!(
-                                @field_new $kty, $vty, $kc,
-                                define_moka_cache!(@cap $( $cap )?)
-                            ),
+                            [<inner_ $name>]:
+                                define_moka_cache!(@field_new $kty, $vty, $kc, $cap),
                         )*
                     }
                 }
@@ -244,6 +242,7 @@ macro_rules! define_moka_cache {
                 $(
                     define_moka_cache!(
                         @methods
+                        [vis: $vis]
                         [field: [<inner_ $name>]]
                         [kty: $kty]
                         [vty: $vty]
@@ -254,9 +253,6 @@ macro_rules! define_moka_cache {
             }
         }
     };
-
-    (@cap $cap:expr) => { $cap };
-    (@cap) => { None };
 
     (@field_ty $kty:ty, $vty:ty, true)  => { GroupCache<$kty, $vty, Namespaced> };
     (@field_ty $kty:ty, $vty:ty, false) => { GroupCache<$kty, $vty, Raw> };
@@ -269,6 +265,7 @@ macro_rules! define_moka_cache {
     };
 
     (@methods
+        [vis: $vis:vis]
         [field: $field:ident]
         [kty: $kty:ty]
         [vty: $vty:ty]
@@ -276,35 +273,36 @@ macro_rules! define_moka_cache {
         [true]
     ) => {
         paste! {
-            pub fn [<contains_ $pfx>](&self, key: impl Into<$kty>) -> bool {
+            $vis fn [<contains_ $pfx>](&self, key: impl Into<$kty>) -> bool {
                 self.$field.contains_with_prefix(stringify!($pfx), key)
             }
-            pub async fn [<get_ $pfx>](&self, key: impl Into<$kty>) -> Option<MokaVal<$vty>> {
+            $vis async fn [<get_ $pfx>](&self, key: impl Into<$kty>) -> Option<MokaVal<$vty>> {
                 self.$field.get_with_prefix(stringify!($pfx), key).await
             }
-            pub async fn [<get_ $pfx _with>](
+            $vis async fn [<get_ $pfx _with>](
                 &self,
                 key: impl Into<$kty>,
                 f: impl Future<Output = MokaVal<$vty>>
             ) -> MokaVal<$vty> {
                 self.$field.get_with_with_prefix(stringify!($pfx), key, f).await
             }
-            pub async fn [<set_ $pfx>](&self, key: impl Into<$kty>, value: MokaVal<$vty>) {
+            $vis async fn [<set_ $pfx>](&self, key: impl Into<$kty>, value: MokaVal<$vty>) {
                 self.$field.insert_with_prefix(stringify!($pfx), key, value).await
             }
-            pub async fn [<invalidate_ $pfx>](&self, key: impl Into<$kty>) {
+            $vis async fn [<invalidate_ $pfx>](&self, key: impl Into<$kty>) {
                 self.$field.invalidate_with_prefix(stringify!($pfx), key).await
             }
-            pub async fn [<remove_ $pfx>](&self, key: impl Into<$kty>) -> Option<$vty> {
+            $vis async fn [<remove_ $pfx>](&self, key: impl Into<$kty>) -> Option<$vty> {
                 self.$field.remove_with_prefix(stringify!($pfx), key).await
             }
-            pub async fn [<run_pending_ $pfx _tasks>](&self) {
+            $vis async fn [<run_pending_ $pfx _tasks>](&self) {
                 self.$field.run_pending_tasks().await;
             }
         }
     };
 
     (@methods
+        [vis: $vis:vis]
         [field: $field:ident]
         [kty: $kty:ty]
         [vty: $vty:ty]
@@ -312,29 +310,29 @@ macro_rules! define_moka_cache {
         [false]
     ) => {
         paste! {
-            pub fn [<contains_ $pfx>](&self, key: impl Into<$kty>) -> bool {
+            $vis fn [<contains_ $pfx>](&self, key: impl Into<$kty>) -> bool {
                 self.$field.contains(key)
             }
-            pub async fn [<get_ $pfx>](&self, key: impl Into<$kty>) -> Option<MokaVal<$vty>> {
+            $vis async fn [<get_ $pfx>](&self, key: impl Into<$kty>) -> Option<MokaVal<$vty>> {
                 self.$field.get(key).await
             }
-            pub async fn [<get_ $pfx _with>](
+            $vis async fn [<get_ $pfx _with>](
                 &self,
                 key: impl Into<$kty>,
                 f: impl Future<Output = MokaVal<$vty>>
             ) -> MokaVal<$vty> {
                 self.$field.get_with(key, f).await
             }
-            pub async fn [<set_ $pfx>](&self, key: impl Into<$kty>, value: MokaVal<$vty>) {
+            $vis async fn [<set_ $pfx>](&self, key: impl Into<$kty>, value: MokaVal<$vty>) {
                 self.$field.insert(key, value).await
             }
-            pub async fn [<invalidate_ $pfx>](&self, key: impl Into<$kty>) {
+            $vis async fn [<invalidate_ $pfx>](&self, key: impl Into<$kty>) {
                 self.$field.invalidate(key).await
             }
-            pub async fn [<remove_ $pfx>](&self, key: impl Into<$kty>) -> Option<$vty> {
+            $vis async fn [<remove_ $pfx>](&self, key: impl Into<$kty>) -> Option<$vty> {
                 self.$field.remove(key).await
             }
-            pub async fn [<run_pending_ $pfx _tasks>](&self) {
+            $vis async fn [<run_pending_ $pfx _tasks>](&self) {
                 self.$field.run_pending_tasks().await;
             }
         }
@@ -343,30 +341,35 @@ macro_rules! define_moka_cache {
 
 define_moka_cache! {
     passkey_reg_session => {
+        vis: pub,
         tk: String,
         ty: Bytes,
         key_constraint: true,
         max_size: Some(10)
     }
     passkey_auth_session => {
+        vis: pub,
         tk: String,
         ty: Bytes,
         key_constraint: true,
-        max_size: Some(10)
+        max_size: Some(10),
     }
     upload_tracker_session => {
+        vis: pub,
         tk: Uuid,
         ty: Arc<UploadTracker>,
         key_constraint: false,
         max_size: Some(10)
     }
     res_sign => {
+        vis: pub,
         tk: String,
         ty: Uuid,
         key_constraint: false,
-        max_size: Some(100)
+        max_size: Some(100),
     }
     totp_flow => {
+        vis: pub,
         tk: Uuid,
         ty: Arc<TOTP>,
         key_constraint: false,
@@ -398,19 +401,25 @@ mod tests {
 
     define_moka_cache! {
         passkey_reg_session => {
+            vis: pub,
             tk: MyKey,
             ty: Bytes,
-            key_constraint: true
+            key_constraint: true,
+            max_size: Some(10)
         }
         passkey_auth_session => {
+            vis: pub,
             tk: MyKey,
             ty: Bytes,
-            key_constraint: true
+            key_constraint: true,
+            max_size: Some(10)
         }
         another_item => {
+            vis: pub,
             tk: MyKey,
             ty: ValType,
-            key_constraint: false
+            key_constraint: false,
+            max_size: Some(10)
         }
     }
 
@@ -435,7 +444,6 @@ mod tests {
                 ),
             )
             .await;
-
         let v1 = cache
             .get_passkey_reg_session(MyKey("user1".into()))
             .await
@@ -450,7 +458,6 @@ mod tests {
     #[tokio::test]
     async fn mixed_groups_should_work() {
         let cache = CacheState::new();
-
         cache
             .set_passkey_reg_session(
                 MyKey("k1".into()),
@@ -469,7 +476,6 @@ mod tests {
                 ),
             )
             .await;
-
         assert_eq!(
             cache
                 .get_passkey_reg_session(MyKey("k1".into()))
@@ -486,7 +492,6 @@ mod tests {
                 .1,
             Bytes::from_static(b"Y")
         );
-
         cache
             .set_another_item(
                 MyKey("k2".into()),

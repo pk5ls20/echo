@@ -99,6 +99,7 @@ macro_rules! auth_session {
     ) => {
         paste::paste! {
             #[derive(Debug, thiserror::Error, EchoBusinessError)]
+            #[allow(clippy::enum_variant_names)]
             pub enum MissingCookieError {
                 $(
                     #[error("Failed to extract {cookie} cookie", cookie = stringify!($base_name))]

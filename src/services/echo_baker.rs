@@ -91,8 +91,9 @@ impl<'a> EchoBaker<'a> {
 
     pub fn post_inner_echo<P, E>(
         &self,
-        ctx: WeakArc<EchoState>,
+        state: WeakArc<EchoState>,
         echo: &str,
+        user_id: i64,
         user_permissions: P,
         ext_ids: E,
     ) -> EchoBakerResult<String>
@@ -112,7 +113,7 @@ impl<'a> EchoBaker<'a> {
             .collect();
         let ts = GladiatorTransformer::new(&permissions, &ext_ids);
         let safe_echo = self.builder.clean(echo).to_string();
-        let mut ssr_cons = OutGoingEchoSSRCons::new(ctx);
+        let mut ssr_cons = OutGoingEchoSSRCons::new(state, user_id);
         let mut chain = hlist![OutGoingEchoFilterCons, &mut ssr_cons, GladiatorCollectEnd];
         let output = ts.transform(&safe_echo, &mut chain)?;
         // TODO: use ammonia to filter final result again?
@@ -177,6 +178,7 @@ mod test {
     fn fuzz_test_post_inner_echo() {
         let helper = EchoBaker::new();
         let echo =
+        // qwq <div echo-pm="1" echo-ext-id="1" echo-ext-meta-res-id="1"></div>
         // language=html
         r#"
             <p>
@@ -202,7 +204,7 @@ mod test {
               </div>
             </div>
         "#;
-        let result = helper.post_inner_echo(WeakArc::new(), echo, &[1, 2], &[2]);
+        let result = helper.post_inner_echo(WeakArc::new(), echo, 1, &[1, 2], &[2]);
         tracing::debug!("Post inner echo result: {:?}", result);
         assert_eq!(result.is_ok(), true);
         let result = result.unwrap();

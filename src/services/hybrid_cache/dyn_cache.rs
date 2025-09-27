@@ -102,12 +102,7 @@ impl HybridDynCache {
         Ok(res)
     }
 
-    pub async fn set_inner<'c, K>(
-        &self,
-        key: K,
-        value: &str,
-        overwrite: bool,
-    ) -> HybridCacheResult<()>
+    pub async fn set_inner<K>(&self, key: K, value: &str, overwrite: bool) -> HybridCacheResult<()>
     where
         K: Into<Cow<'static, str>>,
     {

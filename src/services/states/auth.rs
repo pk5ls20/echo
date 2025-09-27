@@ -5,6 +5,7 @@ pub struct AuthState {
     csrf_auth_key: cookie::Key,
     pre_mfa_auth_key: cookie::Key,
     mfa_auth_key: cookie::Key,
+    local_res_key: [u8; 32],
     session_id: Uuid,
 }
 
@@ -17,6 +18,7 @@ impl AuthState {
             csrf_auth_key: cookie::Key::generate(),
             pre_mfa_auth_key: cookie::Key::generate(),
             mfa_auth_key: cookie::Key::generate(),
+            local_res_key: rand::random(),
             session_id,
         }
     }
@@ -35,6 +37,10 @@ impl AuthState {
 
     pub fn get_mfa_auth_key(&self) -> &cookie::Key {
         &self.mfa_auth_key
+    }
+
+    pub fn get_local_res_key(&self) -> &[u8; 32] {
+        &self.local_res_key
     }
 
     pub fn get_session_id(&self) -> &Uuid {

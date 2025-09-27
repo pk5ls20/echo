@@ -248,7 +248,7 @@ mod test {
         let permission_ids = into_set(&[2]);
         let ts = GladiatorTransformer::new(&permission_ids, &ext_ids);
         let mut checker = IncomingEchoCheckCons::new();
-        let mut renderer = OutGoingEchoSSRCons::new_with_dummy_ctx();
+        let mut renderer = OutGoingEchoSSRCons::new_with_dummy_state();
         let mut chain = hlist![
             &mut checker,
             OutGoingEchoFilterCons,
@@ -265,7 +265,7 @@ mod test {
         let owned_permission_set = into_set(&[2]);
         let ts = GladiatorTransformer::new(&permission_ids, &owned_permission_set);
         let mut checker = IncomingEchoCheckCons::new();
-        let mut renderer = OutGoingEchoSSRCons::new_with_dummy_ctx();
+        let mut renderer = OutGoingEchoSSRCons::new_with_dummy_state();
         let mut chain = hlist![
             &mut checker,
             OutGoingEchoFilterCons,
@@ -279,7 +279,7 @@ mod test {
         let permission_ids = into_set(&[1, 2, 3, 4, 114514]);
         let ts = GladiatorTransformer::new(&permission_ids, &ext_ids);
         let mut checker = IncomingEchoCheckCons::new();
-        let mut renderer = OutGoingEchoSSRCons::new_with_dummy_ctx();
+        let mut renderer = OutGoingEchoSSRCons::new_with_dummy_state();
         let mut chain = hlist![
             &mut checker,
             OutGoingEchoFilterCons,
@@ -345,7 +345,7 @@ mod test {
         let ts = GladiatorTransformer::new(&permission_ids, &ext_ids);
         let mut checker = IncomingEchoCheckCons::new();
         let mut res_collector = IncomingEchoResExtractorCons::new();
-        let mut renderer = OutGoingEchoSSRCons::new_with_dummy_ctx();
+        let mut renderer = OutGoingEchoSSRCons::new_with_dummy_state();
         let mut chain = hlist![
             &mut checker,
             &mut res_collector,

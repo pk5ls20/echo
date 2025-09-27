@@ -65,7 +65,7 @@ pub async fn totp_setup_start(
     state
         .cache
         .set_totp_flow(
-            totp_sess.clone(),
+            totp_sess,
             (MokaExpiration::new(Duration::minutes(5)), totp.clone()),
         )
         .await;
@@ -95,9 +95,9 @@ pub async fn totp_setup_finish(
         .cache
         .get_totp_flow(req.totp_sess)
         .await
-        .ok_or(bad_request!(
-            "TOTP setup session not found or expired, please start over"
-        ))?;
+        .ok_or_else(|| {
+            bad_request!("TOTP setup session not found or expired, please start over")
+        })?;
     let current = totp
         .generate_current()
         .map_err(|e| internal!(e, "Failed to generate current TOTP from cached secret"))?;
@@ -148,7 +148,7 @@ pub async fn totp_verify(
                 .list_user_totp_credential(user_id)
                 .await
                 .map_err(|e| internal!(e, "Failed to load TOTP credential"))?
-                .ok_or(bad_request!("TOTP is not configured"))?;
+                .ok_or_else(|| bad_request!("TOTP is not configured"))?;
             let totp = mfa_service
                 .load_totp(&cred.totp_credential_data)
                 .map_err(|e| internal!(e, "Failed to decode TOTP"))?;

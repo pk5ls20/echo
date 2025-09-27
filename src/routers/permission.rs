@@ -8,17 +8,28 @@ use crate::services::states::db::{EchoDatabaseExecutor, PageQueryBinder, PageQue
 use ahash::HashSet;
 use axum::Json;
 use axum::extract::State;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use time::OffsetDateTime;
 
 pub type PermissionRouterState = State<(Arc<EchoState>, Arc<HybridCacheService>)>;
 
+#[derive(Debug, Deserialize)]
+pub struct AddPermissionReq {
+    pub description: String,
+    pub color: i64,
+}
+
+#[derive(Debug, Serialize)]
+pub struct AddPermissionRes {
+    pub permission_id: i64,
+}
+
 pub async fn add_permission(
     current_user_info: BasicAuthData,
     State((state, cache)): PermissionRouterState,
-    Json(req): Json<Permission>,
-) -> ApiResult<Json<GeneralResponse<()>>> {
+    Json(req): Json<AddPermissionReq>,
+) -> ApiResult<Json<GeneralResponse<AddPermissionRes>>> {
     let current_user = cache
         .users
         .get_user_by_user_id(current_user_info.user_id)
@@ -30,7 +41,8 @@ pub async fn add_permission(
     if !Permission::is_valid_color_i64(req.color) {
         return Err(bad_request!("Invalid color value"));
     }
-    state
+    // TODO: RustRover cannot infer the type here, so fxxk u jetbrains!
+    let permission_id: i64 = state
         .db
         .single(async |mut exec: EchoDatabaseExecutor<'_>| {
             exec.permission()
@@ -39,7 +51,10 @@ pub async fn add_permission(
         })
         .await
         .map_err(|e| bad_request!(e, "Failed to add permission"))?;
-    Ok(general_json_res!("Permission added"))
+    Ok(general_json_res!(
+        "Permission added",
+        AddPermissionRes { permission_id }
+    ))
 }
 
 pub async fn modify_permission(

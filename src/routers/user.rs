@@ -58,7 +58,7 @@ pub async fn user_register(
                         .get_invite_code_by_code(&code)
                         .await
                         .map_err(|e| internal!(e, "Failed to query invitation code from database"))?
-                        .ok_or(bad_request!("Cannot find this invitation code"))?;
+                        .ok_or_else(|| bad_request!("Cannot find this invitation code"))?;
                     if !code.is_valid() {
                         return Err(bad_request!("This invitation code is not valid"));
                     }
@@ -122,7 +122,7 @@ pub async fn user_login(
                 .query_user_by_username(&req.username)
                 .await
                 .map_err(|e| internal!(e, "Failed to query user from database"))?
-                .ok_or(bad_request!("User not found"))?;
+                .ok_or_else(|| bad_request!("User not found"))?;
             let user_permission = exec
                 .permission()
                 .combined_query_user_permission(user_row.id, &user_row.role)
@@ -195,7 +195,7 @@ pub struct ModifyUserInfoReqInner {
     pub username: Option<String>,
     pub password_hash: Option<String>,
     pub role: Option<Role>,
-    pub avatar_res_id: Option<Option<i64>>,
+    pub avatar_res_id: Option<Vec<i64>>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -225,12 +225,17 @@ pub async fn modify_user_info(
     {
         return Err(bad_request!("You are not allowed to change your own role"));
     }
+    if let Some(avatar_res_id) = &req.inner.avatar_res_id
+        && avatar_res_id.len() > 1
+    {
+        return Err(bad_request!("You can only set one avatar resource!"));
+    }
     let upd_row = UserRowOptional {
         id: req.user_id,
         username: req.inner.username,
         password_hash: req.inner.password_hash,
         role: req.inner.role,
-        avatar_res_id: req.inner.avatar_res_id,
+        avatar_res_id: req.inner.avatar_res_id.map(|v| v.first().copied()),
     };
     cache
         .users

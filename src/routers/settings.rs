@@ -82,7 +82,7 @@ pub async fn set_dyn_settings(
     Json(req): Json<SetDynSettingsReq>,
 ) -> ApiResult<Json<GeneralResponse<()>>> {
     DynSettingCollector::try_parse(&req.key, &req.new_value)
-        .ok_or(internal!("Cannot find the given key"))?
+        .ok_or_else(|| internal!("Cannot find the given key"))?
         .map_err(|e| internal!(e, "Failed to parse new value for the given key"))?;
     cache
         .dyn_settings

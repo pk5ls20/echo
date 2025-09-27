@@ -11,8 +11,8 @@ use crate::routers::permission::{
     grant_permission, modify_permission, revoke_permission,
 };
 use crate::routers::resource::{
-    delete_resource, get_resource_by_ids, update_resource, upload_chunk, upload_commit,
-    upload_create,
+    delete_resource, get_resource_by_ids, get_resource_by_maybe_sign, update_resource,
+    upload_chunk, upload_commit, upload_create,
 };
 use crate::routers::settings::{get_dyn_settings, get_static_settings, set_dyn_settings};
 use crate::routers::user::{
@@ -21,6 +21,7 @@ use crate::routers::user::{
 use crate::services::echo_baker::EchoBaker;
 use crate::services::hybrid_cache::HybridCacheService;
 use crate::services::mfa::MFAService;
+use crate::services::res_manager::ResManagerService;
 use crate::services::states::EchoState;
 use crate::services::upload_tracker::UploadTrackerService;
 use axum::Router;
@@ -60,6 +61,7 @@ pub async fn router(state: Arc<EchoState>) -> Router {
     };
     let hybrid_cache_service = Arc::new(HybridCacheService::new(state.clone()));
     let echo_baker_service = Arc::new(EchoBaker::new());
+    let res_manager_service = Arc::new(ResManagerService::new(state.clone()));
     let raw_layer = echo_layer_builder!(state);
     let basic_layer = echo_layer_builder!(state, b);
     let full_mfa_layer = echo_layer_builder!(state, b, m);
@@ -135,7 +137,8 @@ pub async fn router(state: Arc<EchoState>) -> Router {
             )
             .route(
                 "/",
-                post(get_resource_by_ids)
+                get(get_resource_by_maybe_sign)
+                    .post(get_resource_by_ids)
                     .patch(update_resource)
                     .delete(delete_resource),
             )
@@ -144,6 +147,7 @@ pub async fn router(state: Arc<EchoState>) -> Router {
                 state.clone(),
                 upload_tracker_service,
                 hybrid_cache_service.clone(),
+                res_manager_service,
             ))
     };
     let invite_code_router = {

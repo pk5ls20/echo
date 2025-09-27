@@ -4,21 +4,6 @@ use sqlx::FromRow;
 use std::fmt::Debug;
 use uuid::Uuid;
 
-#[derive(Debug, Serialize, Deserialize, FromRow)]
-pub struct ResourceItemRawInner {
-    pub uploader_id: i64,
-    pub res_name: String,
-    pub res_uuid: Uuid,
-    pub res_ext: String,
-}
-
-#[derive(Debug, Serialize, Deserialize, FromRow)]
-pub struct ResourceItemRaw {
-    pub id: i64,
-    #[sqlx(flatten)]
-    pub inner: ResourceItemRawInner,
-}
-
 #[derive(Debug, Copy, Clone, Eq, PartialEq, Serialize, Deserialize, sqlx::Type)]
 #[repr(u8)]
 #[serde(rename_all = "lowercase")]
@@ -35,10 +20,29 @@ pub struct ResourceReferenceInner {
 }
 
 #[derive(Debug, Serialize, Deserialize, FromRow)]
-pub struct ResourceReference {
+pub struct ResourceItemRawInfo {
+    pub uploader_id: i64,
+    pub res_name: String,
+    pub res_uuid: Uuid,
+    pub res_ext: String,
+}
+
+impl ResourceItemRawInfo {
+    pub fn file_name(&self) -> String {
+        match self.res_ext.is_empty() {
+            true => self.res_uuid.to_string(),
+            false => format!("{}.{}", self.res_uuid, self.res_ext),
+        }
+    }
+}
+
+#[derive(Debug, Serialize, Deserialize, FromRow)]
+pub struct ResourceItemWithRefRaw {
     pub id: i64,
     #[sqlx(flatten)]
-    pub inner: ResourceReferenceInner,
+    pub info: ResourceItemRawInfo,
+    pub target_id: i64,
+    pub target_type: ResourceTarget,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
