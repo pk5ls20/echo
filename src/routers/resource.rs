@@ -273,17 +273,10 @@ pub async fn get_resource_by_ids(
     ))
 }
 
-#[derive(Debug, Serialize, Deserialize)]
-pub struct GetResourceByMaybeSignReq {
-    pub res_id: i64,
-    #[serde(flatten)]
-    pub exc_item: Option<ExchangedResourceItem>,
-}
-
 pub async fn get_resource_by_maybe_sign(
     current_user_info: BasicAuthData,
     State((state, _, cache, res_manager)): ResourceRouterState,
-    Query(q): Query<GetResourceByMaybeSignReq>,
+    Query(q): Query<ExchangedResourceItem>,
     req: Request,
 ) -> ApiResult<Response<ServeFileSystemResponseBody>> {
     let current_user = cache
@@ -291,10 +284,10 @@ pub async fn get_resource_by_maybe_sign(
         .get_user_by_user_id(current_user_info.user_id)
         .await
         .map_err(|e| internal!(e, "Failed to fetch user"))?;
-    let (res_id, need_check) = match &q.exc_item {
-        Some(exc) => {
+    let (res_id, need_check) = match &q.cred {
+        Some(cred) => {
             let res_id = res_manager
-                .verify(q.res_id, exc)
+                .verify(q.res_id, cred)
                 .map_err(|e| bad_request!(e, "Failed to verify exchanged resource item"))?
                 .res_id;
             (res_id, false)

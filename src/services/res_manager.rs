@@ -10,7 +10,6 @@ use serde_with::{
 use sha2::Sha256;
 use std::sync::Arc;
 use time::{Duration, OffsetDateTime};
-use url::{Url, form_urlencoded};
 
 #[derive(Debug, thiserror::Error, EchoBusinessError)]
 pub enum ResManagerServiceError {
@@ -49,9 +48,17 @@ pub struct ExchangedResourceTag {
     pub res_id: i64,
 }
 
-#[serde_as]
 #[derive(Debug, Serialize, Deserialize)]
 pub struct ExchangedResourceItem {
+    #[serde(flatten)]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cred: Option<ExchangedResourceItemCred>,
+    pub res_id: i64,
+}
+
+#[serde_as]
+#[derive(Debug, Serialize, Deserialize)]
+pub struct ExchangedResourceItemCred {
     #[serde_as(as = "Base64<UrlSafe>")]
     #[serde(rename = "aira")]
     pub tag: Vec<u8>,
@@ -62,20 +69,14 @@ pub struct ExchangedResourceItem {
 
 impl ExchangedResourceItem {
     pub fn to_url(&self, base_url: Option<&str>) -> ResManagerServiceResult<String> {
-        serde_urlencoded::to_string(self)
-            .map_err(Into::into)
-            .and_then(|qs| {
-                base_url.map_or_else(
-                    || Ok(format!("/?{qs}")),
-                    |base| {
-                        Url::parse(base).map_err(Into::into).map(|mut u| {
-                            u.query_pairs_mut()
-                                .extend_pairs(form_urlencoded::parse(qs.as_bytes()));
-                            u.into()
-                        })
-                    },
-                )
-            })
+        let qs = serde_urlencoded::to_string(self)?;
+        let base = base_url.unwrap_or("/");
+        let url = if qs.is_empty() {
+            base.to_string()
+        } else {
+            format!("{base}{}{qs}", if base.contains('?') { '&' } else { '?' })
+        };
+        Ok(url)
     }
 }
 
@@ -112,15 +113,18 @@ impl ResManagerService {
         mac.update(&exchange_res);
         let sig = mac.finalize().into_bytes().to_vec();
         Ok(ExchangedResourceItem {
-            tag: exchange_res,
-            sig,
+            cred: Some(ExchangedResourceItemCred {
+                tag: exchange_res,
+                sig,
+            }),
+            res_id,
         })
     }
 
     pub fn verify(
         &self,
         res_id: i64,
-        item: &ExchangedResourceItem,
+        item: &ExchangedResourceItemCred,
     ) -> ResManagerServiceResult<ExchangedResourceTag> {
         let mut mac = self.get_mac()?;
         mac.update(&item.tag);

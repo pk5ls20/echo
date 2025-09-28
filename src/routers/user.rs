@@ -195,7 +195,8 @@ pub struct ModifyUserInfoReqInner {
     pub username: Option<String>,
     pub password_hash: Option<String>,
     pub role: Option<Role>,
-    pub avatar_res_id: Option<Vec<i64>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub avatar_res_id: Option<Option<i64>>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -225,17 +226,12 @@ pub async fn modify_user_info(
     {
         return Err(bad_request!("You are not allowed to change your own role"));
     }
-    if let Some(avatar_res_id) = &req.inner.avatar_res_id
-        && avatar_res_id.len() > 1
-    {
-        return Err(bad_request!("You can only set one avatar resource!"));
-    }
     let upd_row = UserRowOptional {
         id: req.user_id,
         username: req.inner.username,
         password_hash: req.inner.password_hash,
         role: req.inner.role,
-        avatar_res_id: req.inner.avatar_res_id.map(|v| v.first().copied()),
+        avatar_res_id: req.inner.avatar_res_id,
     };
     cache
         .users

@@ -124,7 +124,7 @@ impl<'a> EchoExtHandler<'a> for EchoResourceExt<'a> {
         let res_manager = ResManagerService::new(state);
         let res_url = res_manager
             .sign(ctx.user_id, Duration::minutes(10), res_id_int)?
-            .to_url(None)?;
+            .to_url(Some("/api/v1/resource"))?;
         Ok(Self { res_id, res_url })
     }
 }
