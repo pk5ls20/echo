@@ -1,3 +1,4 @@
+use crate::gladiator::ext_plugins::EchoExtMetaPubInfo;
 use crate::models::api::prelude::*;
 use crate::models::echo::Echo;
 use crate::models::session::BasicAuthData;
@@ -6,6 +7,7 @@ use crate::services::echo_baker::{EchoBaker, EchoBakerError};
 use crate::services::hybrid_cache::HybridCacheService;
 use crate::services::states::EchoState;
 use crate::services::states::db::{EchoDatabaseExecutor, PageQueryBinder, PageQueryResult};
+use ahash::HashMap;
 use axum::Json;
 use axum::extract::State;
 use serde::{Deserialize, Serialize};
@@ -197,4 +199,13 @@ pub async fn list_echo(
         })
         .map_err(|e: EchoBakerError| internal!(e, "Failed to bake echo content"))?;
     Ok(general_json_res!("Successfully fetched echos", echos))
+}
+
+pub async fn list_echo_ext(
+    State(_): EchoRouterState,
+) -> ApiResult<Json<GeneralResponse<&'static HashMap<u32, EchoExtMetaPubInfo>>>> {
+    Ok(general_json_res!(
+        "Successfully fetched echo ext info",
+        EchoBaker::all_ext_metas()
+    ))
 }

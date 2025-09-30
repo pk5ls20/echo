@@ -1,6 +1,6 @@
 #![doc = include_str!("gladiator/README.md")]
 
-mod ext_plugins;
+pub mod ext_plugins;
 mod pipeline;
 
 use echo_macros::EchoBusinessError;
@@ -85,7 +85,6 @@ pub mod prelude {
 
 #[cfg(test)]
 mod test {
-    use super::prelude::IncomingCheckConsError::PermissionDenied;
     use super::prelude::*;
     use smallvec::smallvec;
     use unicode_segmentation::UnicodeSegmentation;
@@ -177,10 +176,12 @@ mod test {
         ts.transform(input, &mut chain).unwrap();
         let error = checker.error_ref();
         tracing::debug!("=> Stage1 {:?}", error);
-        assert_eq!(
-            error,
-            Some(&IncomingCheckConsError::RecursionEchoElement(2))
-        );
+        match error {
+            Some(IncomingCheckConsError::RecursionEchoElement(depth)) => {
+                assert_eq!(*depth, 2);
+            }
+            _ => panic!("Expected RecursionEchoElement error, got {:?}", error),
+        }
         let input =
             // language=html
             r#"
@@ -206,7 +207,10 @@ mod test {
         ts.transform(input, &mut chain).unwrap();
         let error = checker.error_ref();
         tracing::debug!("=> Stage2 {:?}", error);
-        assert_eq!(error, Some(&PermissionDenied));
+        match error {
+            Some(IncomingCheckConsError::PermissionDenied) => {}
+            _ => panic!("Expected RecursionEchoElement error, got {:?}", error),
+        }
     }
 
     #[test]
@@ -248,7 +252,7 @@ mod test {
         let permission_ids = into_set(&[2]);
         let ts = GladiatorTransformer::new(&permission_ids, &ext_ids);
         let mut checker = IncomingEchoCheckCons::new();
-        let mut renderer = OutGoingEchoSSRCons::new_with_dummy_state();
+        let mut renderer = OutGoingEchoSSRCons::new_with_dummy_state(1);
         let mut chain = hlist![
             &mut checker,
             OutGoingEchoFilterCons,
@@ -265,7 +269,7 @@ mod test {
         let owned_permission_set = into_set(&[2]);
         let ts = GladiatorTransformer::new(&permission_ids, &owned_permission_set);
         let mut checker = IncomingEchoCheckCons::new();
-        let mut renderer = OutGoingEchoSSRCons::new_with_dummy_state();
+        let mut renderer = OutGoingEchoSSRCons::new_with_dummy_state(1);
         let mut chain = hlist![
             &mut checker,
             OutGoingEchoFilterCons,
@@ -279,7 +283,7 @@ mod test {
         let permission_ids = into_set(&[1, 2, 3, 4, 114514]);
         let ts = GladiatorTransformer::new(&permission_ids, &ext_ids);
         let mut checker = IncomingEchoCheckCons::new();
-        let mut renderer = OutGoingEchoSSRCons::new_with_dummy_state();
+        let mut renderer = OutGoingEchoSSRCons::new_with_dummy_state(1);
         let mut chain = hlist![
             &mut checker,
             OutGoingEchoFilterCons,
@@ -345,7 +349,7 @@ mod test {
         let ts = GladiatorTransformer::new(&permission_ids, &ext_ids);
         let mut checker = IncomingEchoCheckCons::new();
         let mut res_collector = IncomingEchoResExtractorCons::new();
-        let mut renderer = OutGoingEchoSSRCons::new_with_dummy_state();
+        let mut renderer = OutGoingEchoSSRCons::new_with_dummy_state(1);
         let mut chain = hlist![
             &mut checker,
             &mut res_collector,

@@ -1,5 +1,5 @@
 use crate::echo_layer_builder;
-use crate::routers::echo::{add_echo, delete_echo, list_echo, modify_echo};
+use crate::routers::echo::{add_echo, delete_echo, list_echo, list_echo_ext, modify_echo};
 use crate::routers::invite_code::{create_invite_code, list_invite_codes, revoke_invite_code};
 use crate::routers::mfa::{
     get_mfa_infos, get_mfa_op_logs, totp_delete, totp_list, totp_setup_finish, totp_setup_start,
@@ -187,6 +187,7 @@ pub async fn router(state: Arc<EchoState>) -> Router {
                     .delete(delete_echo)
                     .post(list_echo),
             )
+            .route("/ext", get(list_echo_ext))
             .layer(full_mfa_layer())
             .with_state((
                 state.clone(),

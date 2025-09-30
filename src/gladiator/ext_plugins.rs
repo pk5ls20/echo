@@ -5,6 +5,7 @@ use abv::bv2av;
 use echo_macros::{EchoBusinessError, EchoExt};
 use leptos::prelude::*;
 use markup5ever::Attribute;
+use serde::Serialize;
 use std::cell::Ref;
 use std::sync::Weak as WeakArc;
 use time::Duration;
@@ -30,14 +31,44 @@ pub enum EchoExtError {
     ResManagerService(#[from] ResManagerServiceError),
 }
 
-pub type EchoExtResult<T> = Result<T, EchoExtError>;
+pub(super) type EchoExtResult<T> = Result<T, EchoExtError>;
 
-pub(super) trait EchoExtMeta {
+#[derive(Debug, Serialize)]
+pub struct EchoExtMetaFieldCommonVal {
+    #[serde(rename = "type")]
+    pub typ: &'static str,
+    pub desc: Option<&'static str>,
+    pub example: Option<&'static str>,
+}
+
+pub trait EchoExtMeta {
     const ID: u32;
-    const FUZZ_H: u32 = 200;
-    const FUZZ_W: u32 = 300;
-    const META_KEY: Option<phf::Set<&'static str>>;
+    const DESC: Option<&'static str> = None;
+    const SIDE_EFFECT: bool = false;
+    const FUZZ_HW: (u32, u32) = (200, 300); // height, width
+    const META: Option<phf::Map<&'static str, EchoExtMetaFieldCommonVal>>;
     const EVALUATE_KEY: Option<phf::Set<&'static str>>;
+}
+
+#[derive(Debug, Serialize)]
+pub struct EchoExtMetaPubInfo {
+    pub desc: Option<&'static str>,
+    pub side_effect: bool,
+    pub meta: Option<phf::Map<&'static str, EchoExtMetaFieldCommonVal>>,
+}
+
+impl EchoExtMetaPubInfo {
+    #[inline]
+    pub const fn from_meta<M>() -> Self
+    where
+        M: EchoExtMeta,
+    {
+        Self {
+            desc: M::DESC,
+            side_effect: M::SIDE_EFFECT,
+            meta: M::META,
+        }
+    }
 }
 
 pub(super) trait EchoExtHandler<'a>: EchoExtMeta {
@@ -71,8 +102,8 @@ pub(super) trait EchoExtHandler<'a>: EchoExtMeta {
                 .filter_map(|a| a.name.local.as_ref().strip_prefix(PREFIX))
         };
         let stripped = names_stripped().collect::<Vec<_>>();
-        if let Some(meta) = Self::META_KEY
-            && let Some(&missing) = meta.iter().find(|&&need| !stripped.contains(&need))
+        if let Some(meta) = Self::META
+            && let Some(&missing) = meta.keys().find(|&&need| !stripped.contains(&need))
         {
             return Err(EchoExtError::MetaKeyNotExist(missing.to_string()));
         }
@@ -103,8 +134,9 @@ pub(super) trait EchoExtRender<'a>: EchoExtHandler<'a> {
 }
 
 #[derive(Debug, EchoExt)]
-#[echo_ext(id = 1)]
+#[echo_ext(id = 1, desc = "Echo built-in resource extension", side_effect = true)]
 pub(super) struct EchoResourceExt<'a> {
+    #[field(desc = "Echo resource id", example = "114514")]
     res_id: &'a str,
     #[eval]
     res_url: String,
@@ -136,17 +168,19 @@ impl<'a> EchoExtRender<'a> for EchoResourceExt<'a> {
 }
 
 #[derive(Debug, EchoExt)]
-#[echo_ext(id = 2)]
+#[echo_ext(id = 2, desc = "Bilibili video extension")]
 pub(super) struct BiliVideoExt<'a> {
-    /// Original av/bv id
+    #[field(desc = "Original av/bv id", example = "BV1sE411W7qx")]
     vid: &'a str,
+    #[field(desc = "Whether to autoplay the video", example = "true")]
     autoplay: bool,
+    #[field(desc = "Whether to use simple player", example = "false")]
     simple: bool,
     #[eval]
     av_id: u64,
     // TODO: video page (P1, P2, ...)
     // TODO: In practice, adding `video_page` itself is straightforward, but implementing it as
-    // TODO: `Option<video_page>` currently lacks detailed specifications in the current standard.
+    // TODO: `Option<video_page>` currently lacks `echo-pm` detailed specifications in the current standard.
 }
 
 pub(super) enum BiliVid<'a> {
@@ -235,9 +269,11 @@ impl<'a> EchoExtRender<'a> for BiliVideoExt<'a> {
 }
 
 #[derive(Debug, EchoExt)]
-#[echo_ext(id = 3)]
+#[echo_ext(id = 3, desc = "NetEase Music card extension")]
 pub(super) struct NetEaseMusicExt {
+    #[field(desc = "NetEase Music song id", example = "22803152")]
     id: u64,
+    #[field(desc = "Whether to autoplay the music", example = "false")]
     autoplay: bool,
 }
 
@@ -282,7 +318,13 @@ impl<'a> EchoExtRender<'a> for NetEaseMusicExt {
 #[macro_export]
 macro_rules! echo_ext_dispatch {
     ($($ty:ty),+ $(,)?) => {
-        pub fn validate_attr<'a>(
+        use ahash::HashMapExt;
+
+        pub const EXT_COUNT: usize = <[()]>::len(&[
+            $({ let _ = stringify!($ty); }),*
+        ]);
+
+        pub(super) fn validate_attr<'a>(
             id: u32,
             attr: &'a ::std::cell::Ref<'a, ::std::vec::Vec<markup5ever::Attribute>>,
         ) -> EchoExtResult<()> {
@@ -294,7 +336,7 @@ macro_rules! echo_ext_dispatch {
             }
         }
 
-        pub fn render<'a>(
+        pub(super) fn render<'a>(
             id: u32,
             state: WeakArc<$crate::services::states::EchoState>,
             ctx: &$crate::gladiator::pipeline::cons::OutGoingEchoSSRConsCtx,
@@ -310,10 +352,10 @@ macro_rules! echo_ext_dispatch {
             }
         }
 
-        pub fn fuzz_hw(id: u32) -> (u32, u32) {
+        pub(super) fn fuzz_hw(id: u32) -> (u32, u32) {
             match id {
                 $(
-                    < $ty as EchoExtMeta >::ID => (< $ty as EchoExtMeta >::FUZZ_H, < $ty as EchoExtMeta >::FUZZ_W),
+                    < $ty as EchoExtMeta >::ID => < $ty as EchoExtMeta >::FUZZ_HW,
                 )+
                 _ => (200, 300), // fallback
             }
@@ -322,6 +364,14 @@ macro_rules! echo_ext_dispatch {
         pub const ALL_EXT_IDS: &'static [u32] = &[
             $( < $ty as EchoExtMeta >::ID, )+
         ];
+
+        pub static ALL_EXT_METAS: ::once_cell::sync::Lazy<::ahash::HashMap<u32, $crate::gladiator::ext_plugins::EchoExtMetaPubInfo>> = ::once_cell::sync::Lazy::new(|| {
+            let mut m = ::ahash::HashMap::with_capacity(EXT_COUNT);
+            $(
+                m.insert(< $ty as EchoExtMeta >::ID, $crate::gladiator::ext_plugins::EchoExtMetaPubInfo::from_meta::<$ty>());
+            )+
+            m
+        });
     }
 }
 

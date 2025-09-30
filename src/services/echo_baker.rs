@@ -1,5 +1,7 @@
+use crate::gladiator::ext_plugins::{ALL_EXT_METAS, EchoExtMetaPubInfo};
 use crate::gladiator::prelude::*;
 use crate::services::states::EchoState;
+use ahash::HashMap;
 use echo_macros::EchoBusinessError;
 use frunk::hlist;
 use maplit::hashset;
@@ -46,11 +48,6 @@ impl<'a> EchoBaker<'a> {
             .add_generic_attributes(&["echo-pm", "echo-ext-id"])
             .add_generic_attribute_prefixes(["echo-ext-meta-"]);
         Self { builder }
-    }
-
-    #[inline]
-    pub fn all_ext_ids() -> &'static [u32] {
-        ALL_EXT_IDS
     }
 
     pub fn add_outer_echo<P, E>(
@@ -122,6 +119,16 @@ impl<'a> EchoBaker<'a> {
             return Err(EchoBakerError::GladiatorPostInner);
         }
         Ok(output)
+    }
+
+    #[inline]
+    pub fn all_ext_ids() -> &'static [u32] {
+        ALL_EXT_IDS
+    }
+
+    #[inline]
+    pub fn all_ext_metas() -> &'static HashMap<u32, EchoExtMetaPubInfo> {
+        &ALL_EXT_METAS
     }
 }
 

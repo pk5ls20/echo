@@ -201,7 +201,7 @@ impl GladiatorPipelineCons for OutGoingEchoFilterCons {
                 if !(inner_node.has_permission && element_node.ext_has_permission) {
                     let (_, attrs) = inner_node.split();
                     let mut attrs_mut = attrs.borrow_mut();
-                    // TODO: need a better way to handle this
+                    // TODO: need a better way to handle this (maybe filled with dummy html?)
                     let (fuzz_h, fuzz_w) =
                         fuzz_hw(element_node.ext_id.as_ref().copied().unwrap_or_default());
                     *attrs_mut = vec![Attribute {
