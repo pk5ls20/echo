@@ -1,10 +1,12 @@
 use crate::gladiator::ext_plugins::{ALL_EXT_METAS, EchoExtMetaPubInfo};
 use crate::gladiator::prelude::*;
+use crate::models::echo::Echo;
 use crate::services::states::EchoState;
 use ahash::HashMap;
 use echo_macros::EchoBusinessError;
 use frunk::hlist;
 use maplit::hashset;
+use scc::HashCache;
 use smallvec::SmallVec;
 use std::borrow::Borrow;
 use std::sync::Weak as WeakArc;
@@ -28,10 +30,11 @@ pub struct AddOuterEchoRes {
 
 pub struct EchoBaker<'a> {
     builder: ammonia::Builder<'a>,
+    cache: HashCache<u64, String>,
 }
 
 impl<'a> EchoBaker<'a> {
-    pub fn new() -> Self {
+    pub fn new(echo_cache_cap: usize) -> Self {
         #[rustfmt::skip]
         let tiptap_tags = hashset![
             "blockquote", "p", "pre", "h1", "h2", "h3", "h4", "h5", "h6", "ul", "ol", "li", "hr",
@@ -47,7 +50,8 @@ impl<'a> EchoBaker<'a> {
             .filter_style_properties(hashset!["color"])
             .add_generic_attributes(&["echo-pm", "echo-ext-id"])
             .add_generic_attribute_prefixes(["echo-ext-meta-"]);
-        Self { builder }
+        let cache = HashCache::with_capacity(0, echo_cache_cap);
+        Self { builder, cache }
     }
 
     pub fn add_outer_echo<P, E>(
@@ -89,18 +93,29 @@ impl<'a> EchoBaker<'a> {
     pub fn post_inner_echo<P, E>(
         &self,
         state: WeakArc<EchoState>,
-        echo: &str,
-        user_id: i64,
-        user_permissions: P,
+        echo: &Echo,
+        current_user_id: i64,
+        current_user_permissions: P,
         ext_ids: E,
-    ) -> EchoBakerResult<String>
+        no_cache: bool,
+    ) -> EchoBakerResult<Option<String>>
     where
         P: IntoIterator,
         P::Item: Borrow<i64>,
         E: IntoIterator,
         E::Item: Borrow<u32>,
     {
-        let permissions = user_permissions
+        if echo.content.is_none() {
+            return Ok(None);
+        }
+        let mut echo_cache_hash = None;
+        if !no_cache {
+            echo_cache_hash = Some(echo.render_hash());
+            if let Some(cached) = self.cache.get_sync(&echo_cache_hash.unwrap()) {
+                return Ok(Some(cached.get().clone()));
+            }
+        }
+        let permissions = current_user_permissions
             .into_iter()
             .map(|x| x.borrow().to_string())
             .collect();
@@ -109,8 +124,11 @@ impl<'a> EchoBaker<'a> {
             .map(|x| x.borrow().to_string())
             .collect();
         let ts = GladiatorTransformer::new(&permissions, &ext_ids);
-        let safe_echo = self.builder.clean(echo).to_string();
-        let mut ssr_cons = OutGoingEchoSSRCons::new(state, user_id);
+        let safe_echo = self
+            .builder
+            .clean(echo.content.as_ref().unwrap())
+            .to_string();
+        let mut ssr_cons = OutGoingEchoSSRCons::new(state, current_user_id);
         let mut chain = hlist![OutGoingEchoFilterCons, &mut ssr_cons, GladiatorCollectEnd];
         let output = ts.transform(&safe_echo, &mut chain)?;
         // TODO: use ammonia to filter final result again?
@@ -118,7 +136,10 @@ impl<'a> EchoBaker<'a> {
             tracing::error!("Post inner echo SSR error: {:?}", err);
             return Err(EchoBakerError::GladiatorPostInner);
         }
-        Ok(output)
+        if let Some(echo_hash) = echo_cache_hash {
+            let _ = self.cache.put_sync(echo_hash, output.clone());
+        }
+        Ok(Some(output))
     }
 
     #[inline]
@@ -138,7 +159,7 @@ mod test {
 
     #[test]
     fn fuzz_test_add_outer_echo() {
-        let helper = EchoBaker::new();
+        let helper = EchoBaker::new(114514);
         let echo =
         // language=html
         r#"
@@ -183,7 +204,7 @@ mod test {
 
     #[test]
     fn fuzz_test_post_inner_echo() {
-        let helper = EchoBaker::new();
+        let helper = EchoBaker::new(114514);
         let echo =
         // qwq <div echo-pm="1" echo-ext-id="1" echo-ext-meta-res-id="1"></div>
         // language=html
@@ -211,10 +232,17 @@ mod test {
               </div>
             </div>
         "#;
-        let result = helper.post_inner_echo(WeakArc::new(), echo, 1, &[1, 2], &[2]);
+        let result = helper.post_inner_echo(
+            WeakArc::new(),
+            &Echo::dummy_from_str(echo),
+            1,
+            &[1, 2],
+            &[2],
+            true,
+        );
         tracing::debug!("Post inner echo result: {:?}", result);
         assert_eq!(result.is_ok(), true);
-        let result = result.unwrap();
+        let result = result.unwrap().unwrap();
         assert_eq!(result.contains("echowww"), true);
         assert_eq!(result.contains("echoqwq"), false);
         assert_eq!(result.contains("player.bilibili.com/player.html"), true);

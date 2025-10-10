@@ -25,7 +25,7 @@ where
             ResourceTarget::Echo
         )
         .execute(&mut *self.inner)
-        .await?;
+        .await?; // prefer not resolve here
         for res_id in res_ids {
             query!(
                 "INSERT INTO resource_references (res_id, target_id, target_type) VALUES (?, ?, ?)",
@@ -95,10 +95,10 @@ where
     ) -> DataBaseResult<()> {
         query_scalar!(
             // language=sql
-            "UPDATE echos SET content = ?, is_private = ? WHERE id = ? RETURNING id",
+            "UPDATE echos SET content = ?, is_private = ? WHERE id = ?",
             new_content,
+            is_private,
             echo_id,
-            is_private
         )
         .fetch_one(&mut *self.inner)
         .await
@@ -128,19 +128,22 @@ where
             EchoFullViewRaw,
             r#"
                 SELECT
-                    e.id,
-                    e.user_id,
-                    e.content,
-                    e.fav_count,
-                    e.is_private AS "is_private: bool",
-                    e.created_at AS "created_at: OffsetDateTime",
-                    e.last_modified_at AS "last_modified_at: OffsetDateTime",
-                    COALESCE(json_group_array(ep.permission_id), json('[]'))
-                        AS "permission_ids: Json<Vec<i64>>"
+                  e.id,
+                  e.user_id,
+                  e.content,
+                  e.fav_count,
+                  e.is_private AS "is_private: bool",
+                  e.created_at AS "created_at: OffsetDateTime",
+                  e.last_modified_at AS "last_modified_at: OffsetDateTime",
+                  COALESCE((
+                    SELECT json_group_array(ep.permission_id)
+                    FROM echo_permissions AS ep
+                    WHERE ep.echo_id = e.id
+                      AND ep.permission_id IS NOT NULL
+                    ORDER BY ep.permission_id
+                  ), json('[]')) AS "permission_ids: Json<Vec<i64>>"
                 FROM echos AS e
-                LEFT JOIN echo_permissions AS ep ON e.id = ep.echo_id
-                WHERE e.id = ?
-                GROUP BY e.id
+                WHERE e.id = ?;
             "#,
             echo_id
         )
@@ -167,14 +170,15 @@ where
                       e.is_private AS "is_private: bool",
                       e.created_at AS "created_at: OffsetDateTime",
                       e.last_modified_at AS "last_modified_at: OffsetDateTime",
-                      COALESCE(
-                        json_group_array(ep.permission_id) FILTER (WHERE ep.permission_id IS NOT NULL),
-                        json('[]')
-                      ) AS "permission_ids: Json<Vec<i64>>"
+                      COALESCE((
+                        SELECT json_group_array(ep.permission_id)
+                        FROM echo_permissions AS ep
+                        WHERE ep.echo_id = e.id
+                          AND ep.permission_id IS NOT NULL
+                        ORDER BY ep.permission_id
+                      ), json('[]')) AS "permission_ids: Json<Vec<i64>>"
                     FROM echos AS e
-                    LEFT JOIN echo_permissions AS ep ON e.id = ep.echo_id
                     WHERE (?1 IS NULL OR e.user_id = ?1) AND e.id > ?2
-                    GROUP BY e.id
                     ORDER BY e.id
                     LIMIT ?3;
                 "#,

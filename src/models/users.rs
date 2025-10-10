@@ -2,6 +2,7 @@ use crate::models::permission::Permission;
 use ahash::HashSet;
 use serde::{Deserialize, Serialize};
 use sqlx::FromRow;
+use std::collections::BTreeSet;
 use time::OffsetDateTime;
 
 #[derive(Debug, Copy, Clone, Eq, PartialEq, Serialize, Deserialize, sqlx::Type)]
@@ -40,19 +41,19 @@ pub struct UserInternal {
     pub permissions: HashSet<Permission>,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct User {
     pub id: i64,
     pub username: String,
     pub role: Role,
     #[serde(with = "time::serde::timestamp")]
     pub created_at: OffsetDateTime,
-    pub permission_ids: HashSet<i64>,
+    pub permission_ids: BTreeSet<i64>,
     pub avatar_res_id: Option<i64>,
 }
 
 impl UserInternal {
-    pub fn permission_ids(&self) -> HashSet<i64> {
+    pub fn permission_ids(&self) -> BTreeSet<i64> {
         self.permissions.iter().map(|p| p.id).collect()
     }
 

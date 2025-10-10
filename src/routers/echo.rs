@@ -135,13 +135,15 @@ pub async fn delete_echo(
         .await
         .map_err(|e| internal!(e, "Failed to fetch echo"))?;
     match maybe_delete_echo {
-        Some(echo) => {
-            if echo.has_permission(&current_user) {
-                return Err(bad_request!("No permission to delete this echo"));
-            }
-            if echo.user_id != current_user_info.user_id && current_user.role != Role::Admin {
-                return Err(bad_request!("Can only delete your own echo"));
-            }
+        Some(echo) if !echo.has_permission(&current_user) => {
+            Err(bad_request!("No permission to delete this echo"))
+        }
+        Some(echo)
+            if echo.user_id != current_user_info.user_id && current_user.role != Role::Admin =>
+        {
+            Err(bad_request!("Can only delete your own echo"))
+        }
+        Some(_) => {
             state
                 .db
                 .transaction(async |mut exec: EchoDatabaseExecutor<'_>| {
@@ -158,6 +160,7 @@ pub async fn delete_echo(
 #[derive(Debug, Deserialize)]
 pub struct ListEchoReq {
     pub user_id: Option<i64>,
+    pub no_cache: Option<bool>,
     #[serde(flatten)]
     pub page_query: PageQueryBinder,
 }
@@ -184,15 +187,17 @@ pub async fn list_echo(
     echos
         .items
         .iter_mut()
-        .try_for_each(|it| {
+        // TODO: RustRover cannot infer the type here, so fxxk u jetbrains!
+        .try_for_each(|it: &mut Echo| {
             it.content = match it.has_permission(&current_user) {
-                true => Some(baker.post_inner_echo(
+                true => baker.post_inner_echo(
                     Arc::downgrade(&state),
-                    it.content.as_deref().unwrap(),
+                    it,
                     current_user_info.user_id,
                     &current_user.permission_ids,
                     EchoBaker::all_ext_ids(),
-                )?),
+                    req.no_cache.unwrap_or_default(),
+                )?,
                 false => None,
             };
             Ok(())

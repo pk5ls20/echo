@@ -25,7 +25,11 @@ pub enum HybridCacheError {
     PartialItemNotFound(usize, usize),
     #[error(transparent)]
     DatabaseError(#[from] DataBaseError),
-    #[error("Failed to insert item into HashCache")]
+    #[error(
+        "Failed to insert item into HashCache! Since this error indicates that the key already \
+         exists in the cache, however, given that the encoding strategy guarantees no duplicate \
+         keys within the cache at this point, this is rather peculiar..."
+    )]
     InsertCacheError,
 }
 

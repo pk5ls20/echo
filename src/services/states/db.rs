@@ -88,6 +88,25 @@ pub struct PageQueryInner {
 }
 
 #[derive(Debug, Serialize, Deserialize)]
+pub struct NeverRetPageQueryItem {
+    idx: i64,
+}
+
+impl NeverRetPageQueryItem {
+    pub fn from_range(start: i64, size: i64) -> Vec<Self> {
+        (start..start + size)
+            .map(|idx| NeverRetPageQueryItem { idx })
+            .collect()
+    }
+}
+
+impl PageQueryCursor for NeverRetPageQueryItem {
+    fn cursor_field(&self) -> i64 {
+        self.idx
+    }
+}
+
+#[derive(Debug, Serialize, Deserialize)]
 #[serde(bound(deserialize = "T: DeserializeOwned"))]
 pub struct PageQueryResult<T>
 where
@@ -96,6 +115,22 @@ where
     pub items: Vec<T>,
     pub has_more: bool,
     pub next_cursor: Option<i64>,
+}
+
+impl<T> PageQueryResult<T>
+where
+    T: Debug + Serialize + DeserializeOwned,
+{
+    pub fn swap_items<S>(self, items: Vec<S>) -> PageQueryResult<S>
+    where
+        S: Debug + Serialize + DeserializeOwned,
+    {
+        PageQueryResult {
+            items,
+            has_more: self.has_more,
+            next_cursor: self.next_cursor,
+        }
+    }
 }
 
 impl PageQueryBinder {

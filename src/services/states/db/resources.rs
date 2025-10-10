@@ -90,7 +90,7 @@ where
     pub(in crate::services) async fn get_resource_by_id_batch(
         &mut self,
         res_ids: &[i64],
-    ) -> DataBaseResult<Vec<ResourceItemWithRefRaw>> {
+    ) -> DataBaseResult<Vec<Option<ResourceItemWithRefRaw>>> {
         if res_ids.is_empty() {
             return Ok(Vec::new());
         }
@@ -103,7 +103,7 @@ where
                     FROM json_each(?)
                 )
                 SELECT
-                    r.id,
+                    r.id AS "res_id?",
                     r.uploader_id,
                     r.res_name,
                     r.res_uuid AS "res_uuid: Uuid",
@@ -111,8 +111,8 @@ where
                     rr.target_id,
                     rr.target_type AS "target_type: ResourceTarget"
                 FROM input i
-                JOIN resources r           ON r.id = i.id
-                JOIN resource_references rr ON rr.res_id = r.id
+                LEFT JOIN resources r ON r.id = i.id
+                LEFT JOIN resource_references rr ON rr.res_id = r.id
                 ORDER BY i.ord
             "#,
             ids_json
@@ -122,18 +122,20 @@ where
         .resolve()?;
         let out = rows
             .into_iter()
-            .map(|row| ResourceItemWithRefRaw {
-                id: row.id,
-                info: ResourceItemRawInfo {
-                    uploader_id: row.uploader_id,
-                    res_name: row.res_name,
-                    res_uuid: row.res_uuid,
-                    res_ext: row.res_ext,
-                },
-                target_id: row.target_id,
-                target_type: row.target_type,
+            .map(|row| {
+                Some(ResourceItemWithRefRaw {
+                    id: row.res_id?,
+                    info: ResourceItemRawInfo {
+                        uploader_id: row.uploader_id?,
+                        res_name: row.res_name?,
+                        res_uuid: row.res_uuid?,
+                        res_ext: row.res_ext?,
+                    },
+                    target_id: row.target_id?,
+                    target_type: row.target_type?,
+                })
             })
-            .collect();
+            .collect::<Vec<_>>();
         Ok(out)
     }
 }

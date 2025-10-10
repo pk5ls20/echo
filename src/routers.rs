@@ -60,7 +60,7 @@ pub async fn router(state: Arc<EchoState>) -> Router {
         )
     };
     let hybrid_cache_service = Arc::new(HybridCacheService::new(state.clone()));
-    let echo_baker_service = Arc::new(EchoBaker::new());
+    let echo_baker_service = Arc::new(EchoBaker::new(state.config.perf.echo_cache_capacity));
     let res_manager_service = Arc::new(ResManagerService::new(state.clone()));
     let raw_layer = echo_layer_builder!(state);
     let basic_layer = echo_layer_builder!(state, b);

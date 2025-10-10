@@ -41,8 +41,7 @@ pub async fn add_permission(
     if !Permission::is_valid_color_i64(req.color) {
         return Err(bad_request!("Invalid color value"));
     }
-    // TODO: RustRover cannot infer the type here, so fxxk u jetbrains!
-    let permission_id: i64 = state
+    let permission_id = state
         .db
         .single(async |mut exec: EchoDatabaseExecutor<'_>| {
             exec.permission()

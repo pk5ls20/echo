@@ -22,10 +22,7 @@ where
         exp_time: i64,
     ) -> DataBaseResult<i64> {
         let res = query!(
-            r#"
-                INSERT INTO invite_codes (code, issued_by, exp_time)
-                VALUES (?, ?, ?)
-            "#,
+            "INSERT INTO invite_codes (code, issued_by, exp_time) VALUES (?, ?, ?)",
             code,
             issued_by_user_id,
             exp_time
@@ -52,10 +49,10 @@ where
                     code,
                     issued_by,
                     created_at as "created_at: _",
-                    exp_time   as "exp_time: _",
-                    is_used    as "is_used: _",
+                    exp_time as "exp_time: _",
+                    is_used as "is_used: _",
                     used_by,
-                    used_at    as "used_at: _"
+                    used_at as "used_at: _"
                 FROM invite_codes
                 WHERE code = ?
             "#,

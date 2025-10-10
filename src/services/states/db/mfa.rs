@@ -63,11 +63,7 @@ where
     pub async fn mfa_enabled(&mut self, user_id: i64) -> DataBaseResult<bool> {
         query_scalar!(
             // language=sql
-            r#"
-                SELECT mfa_enabled AS "mfa_enabled: bool"
-                FROM mfa_infos
-                WHERE user_id = ?
-            "#,
+            "SELECT mfa_enabled AS 'mfa_enabled: bool' FROM mfa_infos WHERE user_id = ?",
             user_id
         )
         .fetch_optional(&mut *self.inner)

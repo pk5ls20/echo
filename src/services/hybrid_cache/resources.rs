@@ -59,7 +59,7 @@ impl HybridResourcesCache {
         &self,
         res_ids: &[i64],
     ) -> HybridCacheResult<Vec<Arc<ResourceItemWithRefRaw>>> {
-        let mut results: Vec<Option<Arc<ResourceItemWithRefRaw>>> = vec![None; res_ids.len()];
+        let mut results = vec![None; res_ids.len()];
         let mut missing_res_id: SmallVec<[_; 8]> = SmallVec::new();
         let mut missing_res_idx: SmallVec<[_; 8]> = SmallVec::new();
         for (idx, &id) in res_ids.iter().enumerate() {
@@ -71,7 +71,7 @@ impl HybridResourcesCache {
             }
         }
         // TODO: RustRover cannot infer the type here, so fxxk u jetbrains!
-        let db_res: Vec<(Arc<ResourceItemWithRefRaw>, usize)> = self
+        let db_res: Vec<(Option<Arc<ResourceItemWithRefRaw>>, usize)> = self
             .state
             .db
             .single(async |mut exec: EchoDatabaseExecutor<'_>| {
@@ -80,7 +80,7 @@ impl HybridResourcesCache {
                     .get_resource_by_id_batch(&missing_res_id[..])
                     .await?
                     .into_iter()
-                    .map(Arc::from)
+                    .map(|opt| opt.map(Arc::new))
                     .zip(missing_res_idx)
                     .collect::<Vec<_>>();
                 Ok::<_, DataBaseError>(res_rows_arc)
@@ -94,11 +94,16 @@ impl HybridResourcesCache {
             ));
         }
         for (res, idx) in db_res {
-            self.cache
-                .put_async(res.id, res.clone())
-                .await
-                .map_err(|_| HybridCacheError::InsertCacheError)?;
-            results[idx] = Some(res);
+            match res {
+                Some(res) => {
+                    self.cache
+                        .put_async(res.id, res.clone())
+                        .await
+                        .map_err(|_| HybridCacheError::InsertCacheError)?;
+                    results[idx] = Some(res);
+                }
+                None => return Err(HybridCacheError::ItemNotFound),
+            }
         }
         let db_res = results
             .into_iter()

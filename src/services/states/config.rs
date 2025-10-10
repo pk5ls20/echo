@@ -93,6 +93,7 @@ impl Default for ResourceConfig {
 #[derive(Debug, Serialize, Deserialize)]
 pub struct PerfConfig {
     pub user_cache_capacity: usize,
+    pub echo_cache_capacity: usize,
     pub res_cache_capacity: usize,
     pub dyn_setting_cache_capacity: usize,
 }
@@ -101,6 +102,7 @@ impl Default for PerfConfig {
     fn default() -> Self {
         Self {
             user_cache_capacity: 5,
+            echo_cache_capacity: 50,
             res_cache_capacity: 50,
             dyn_setting_cache_capacity: 50,
         }

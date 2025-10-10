@@ -19,7 +19,7 @@ CREATE TABLE resources
 CREATE TABLE resource_references
 (
     id          INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
-    res_id      INTEGER NOT NULL REFERENCES resources (id) ON DELETE CASCADE,
+    res_id      INTEGER NOT NULL UNIQUE REFERENCES resources (id) ON DELETE CASCADE,
     target_id   INTEGER NOT NULL,
     target_type INTEGER NOT NULL -- id of the target table
 );
