@@ -1,5 +1,3 @@
-use crate::services::upload_tracker::UploadTracker;
-use bytes::Bytes;
 use moka::Expiry;
 use moka::future::Cache;
 use moka::notification::RemovalCause;
@@ -11,10 +9,8 @@ use std::marker::PhantomData;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 use time;
-use totp_rs::TOTP;
-use uuid::Uuid;
 
-#[derive(Debug, Clone)]
+#[derive(Copy, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct MokaExpiration(time::Duration);
 
 impl MokaExpiration {
@@ -343,35 +339,42 @@ define_moka_cache! {
     passkey_reg_session => {
         vis: pub,
         tk: String,
-        ty: Bytes,
+        ty: bytes::Bytes,
         key_constraint: true,
         max_size: Some(10)
     }
     passkey_auth_session => {
         vis: pub,
         tk: String,
-        ty: Bytes,
+        ty: bytes::Bytes,
         key_constraint: true,
+        max_size: Some(10),
+    }
+    passkey_ph_session => {
+        vis: pub,
+        tk: i64,
+        ty: Arc<crate::models::mfa::WebAuthnKV>,
+        key_constraint: false,
         max_size: Some(10),
     }
     upload_tracker_session => {
         vis: pub,
-        tk: Uuid,
-        ty: Arc<UploadTracker>,
+        tk: uuid::Uuid,
+        ty: Arc<crate::services::upload_tracker::UploadTracker>,
         key_constraint: false,
         max_size: Some(10)
     }
     res_sign => {
         vis: pub,
         tk: String,
-        ty: Uuid,
+        ty: uuid::Uuid,
         key_constraint: false,
         max_size: Some(100),
     }
     totp_flow => {
         vis: pub,
-        tk: Uuid,
-        ty: Arc<TOTP>,
+        tk: uuid::Uuid,
+        ty: Arc<totp_rs::TOTP>,
         key_constraint: false,
         max_size: Some(10)
     }

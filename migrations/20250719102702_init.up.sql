@@ -11,7 +11,7 @@ CREATE TABLE permissions
 CREATE TABLE resources
 (
     id          INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
-    uploader_id INTEGER NOT NULL REFERENCES users (id) ON DELETE CASCADE,
+    uploader_id INTEGER NOT NULL REFERENCES users (id), -- TODO: maybe change?
     res_name    TEXT    NOT NULL,        -- user provided original name
     res_uuid    BLOB    NOT NULL UNIQUE, -- res uuid
     res_ext     TEXT    NOT NULL         -- file extension
@@ -19,7 +19,7 @@ CREATE TABLE resources
 CREATE TABLE resource_references
 (
     id          INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
-    res_id      INTEGER NOT NULL UNIQUE REFERENCES resources (id) ON DELETE CASCADE,
+    res_id      INTEGER NOT NULL UNIQUE REFERENCES resources (id), -- TODO: maybe change?
     target_id   INTEGER NOT NULL,
     target_type INTEGER NOT NULL -- id of the target table
 );
@@ -33,8 +33,7 @@ CREATE TABLE users
     password_hash TEXT    NOT NULL,
     role          INTEGER NOT NULL,
     created_at    INTEGER NOT NULL DEFAULT (strftime('%s', 'now')),
-    avatar_res_id INTEGER,
-    FOREIGN KEY (avatar_res_id) REFERENCES resources (id) ON DELETE SET NULL
+    avatar_res_id INTEGER REFERENCES resources (id) ON DELETE SET NULL -- TODO: not ok, use <resource_references>
 );
 CREATE TABLE user_permissions
 (
@@ -49,7 +48,7 @@ CREATE TABLE user_permissions
         GENERATED ALWAYS AS (
             CASE
                 WHEN revoked_at IS NULL
-                    AND exp_time > CAST(strftime('%s', 'now') AS INTEGER)
+                    AND (exp_time IS NULL OR exp_time > CAST(strftime('%s', 'now') AS INTEGER))
                     THEN 1
                 ELSE 0
                 END
@@ -61,7 +60,7 @@ CREATE INDEX idx_user_permissions_user_perm ON user_permissions (user_id, permis
 CREATE TABLE echos
 (
     id               INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
-    user_id          INTEGER NOT NULL REFERENCES users (id) ON DELETE CASCADE,
+    user_id          INTEGER NOT NULL REFERENCES users (id), -- ok, always use soft delete for users
     content          TEXT    NOT NULL,
     fav_count        INTEGER NOT NULL DEFAULT 0,
     is_private       INTEGER NOT NULL DEFAULT 0,
@@ -91,11 +90,11 @@ CREATE TABLE invite_codes
 (
     id         INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
     code       TEXT    NOT NULL UNIQUE,
-    issued_by  INTEGER NOT NULL REFERENCES users (id) ON DELETE SET NULL,
+    issued_by  INTEGER NOT NULL REFERENCES users (id) ON DELETE CASCADE,
     created_at INTEGER NOT NULL DEFAULT (strftime('%s', 'now')),
     exp_time   INTEGER NOT NULL,
     is_used    INTEGER NOT NULL DEFAULT 0,
-    used_by    INTEGER NULL REFERENCES users (id) ON DELETE SET NULL,
+    used_by    INTEGER NULL REFERENCES users (id) ON DELETE CASCADE,
     used_at    INTEGER NULL
 );
 

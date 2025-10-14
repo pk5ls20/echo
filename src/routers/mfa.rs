@@ -387,7 +387,11 @@ pub async fn webauthn_auth_start(
         return Err(bad_request!("No passkey configured"));
     }
     let rcr = mfa_service
-        .start_passkey_authentication(current_user.username.clone(), existing)
+        .start_passkey_authentication(
+            current_user_info.user_id,
+            current_user.username.clone(),
+            existing,
+        )
         .await
         .map_err(|e| internal!(e, "Failed to start passkey authentication"))?;
     Ok(general_json_res!("OK", rcr))
@@ -409,10 +413,14 @@ pub async fn webauthn_auth_finish(
         .db
         .transaction(async |mut exec: EchoDatabaseExecutor<'_>| {
             match mfa_service
-                .finish_passkey_authentication(current_user.username.clone(), req)
+                .finish_passkey_authentication(current_user.id, current_user.username.clone(), req)
                 .await
             {
-                Ok(_) => {
+                Ok((_, credential_id)) => {
+                    exec.mfa()
+                        .update_webauthn_last_used(credential_id)
+                        .await
+                        .map_err(|e| internal!(e, "Failed to update passkey last used"))?;
                     exec.mfa()
                         .insert_mfa_op_access_log(
                             current_user_info.user_id,
@@ -424,7 +432,7 @@ pub async fn webauthn_auth_finish(
                                     is_success: true,
                                     ip_address: client_info.ip_address,
                                     user_agent: client_info.user_agent,
-                                    credential_id: None,
+                                    credential_id: Some(credential_id),
                                     error_message: None,
                                 },
                             },

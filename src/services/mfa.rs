@@ -1,18 +1,18 @@
 use crate::get_batch_tuple_pure;
 use crate::models::dyn_setting::{RpId, RpName, RpOrigin};
 use crate::models::mfa::{
-    NewTotpCredential, NewWebauthnCredential, WebauthnCredential, WebauthnState,
+    NewTotpCredential, NewWebauthnCredential, WebAuthnKV, WebauthnCredential, WebauthnState,
 };
-use crate::services::mfa::AuthnError::{InvalidWebauthnRpOrigin, WebAuthnInit};
-use crate::services::states::EchoState;
 use crate::services::states::cache::MokaExpiration;
 use crate::services::states::db::DataBaseError;
+use crate::services::states::EchoState;
 use bytes::Bytes;
 use echo_macros::EchoBusinessError;
-use rand::{Rng, rng};
+use ph::fmph;
+use rand::{rng, Rng};
 use std::sync::Arc;
 use time::Duration;
-use totp_rs::{TOTP, TotpUrlError};
+use totp_rs::{TotpUrlError, TOTP};
 use url::Url;
 use webauthn_rs::prelude::*;
 
@@ -28,6 +28,10 @@ pub enum AuthnError {
     WebAuthnInit(String),
     #[error("Invalid Webauthn RP origin")]
     InvalidWebauthnRpOrigin,
+    #[error("Invalid Webauthn state")]
+    InvalidWebauthnState,
+    #[error("Mismatch WebAuthnKV in same state!")]
+    MismatchWebAuthnKV,
     #[error("WebAuthn error: {0}")]
     WebauthnOther(#[from] WebauthnError),
 }
@@ -58,8 +62,8 @@ impl MFAService {
         let dyn_setting_op = &state.db;
         let (rp_id, rp_origin, rp_name): (String, String, String) =
             get_batch_tuple_pure!(&dyn_setting_op, RpId, RpOrigin, RpName)
-                .map_err(|e| WebAuthnInit(e.to_string()))?;
-        let rp_origin = Url::parse(&rp_origin).map_err(|_| InvalidWebauthnRpOrigin)?;
+                .map_err(|e| AuthnError::WebAuthnInit(e.to_string()))?;
+        let rp_origin = Url::parse(&rp_origin).map_err(|_| AuthnError::InvalidWebauthnRpOrigin)?;
         let webauthn = WebauthnBuilder::new(&rp_id, &rp_origin)
             .map_err(|e| MFAServiceError::Authn(AuthnError::WebauthnOther(e)))?
             .rp_name(&rp_name)
@@ -144,7 +148,7 @@ impl MFAService {
             .cache
             .get_passkey_reg_session(user_name.into())
             .await
-            .ok_or(MFAServiceError::Authn(InvalidWebauthnRpOrigin))?;
+            .ok_or(MFAServiceError::Authn(AuthnError::InvalidWebauthnState))?;
         let info = rmp_serde::from_slice::<WebauthnState<(Uuid, PasskeyRegistration)>>(&info)
             .map_err(MFAServiceError::from)?;
         let res = self
@@ -162,51 +166,83 @@ impl MFAService {
 
     pub async fn start_passkey_authentication(
         &self,
+        user_id: i64,
         user_name: impl Into<String>,
         already_owned_passkey: Vec<WebauthnCredential>,
     ) -> MFAServiceResult<RequestChallengeResponse> {
         let user_name = user_name.into();
+        let idx2id = already_owned_passkey
+            .iter()
+            .map(|it| it.id)
+            .collect::<Vec<_>>();
         let already_owned_passkey = already_owned_passkey
-            .into_iter()
+            .iter()
             .map(|creds| rmp_serde::from_slice::<Passkey>(&creds.credential_data))
             .collect::<Result<Vec<_>, _>>()?;
         let (rcr, auth_state) = self
             .webauthn
             .start_passkey_authentication(&already_owned_passkey)
             .map_err(AuthnError::from)?;
+        let fmph_f = fmph::GOFunction::from(
+            already_owned_passkey
+                .iter()
+                .map(|c| c.cred_id().as_ref())
+                .collect::<Vec<&[u8]>>(),
+        );
         let state = WebauthnState {
             user_name: user_name.clone(),
             state: auth_state,
         };
+        let kv = WebAuthnKV { f: fmph_f, idx2id };
+        let exp = Duration::minutes(5);
         self.state
             .cache
             .set_passkey_auth_session(
                 user_name.clone(),
                 (
-                    MokaExpiration::new(Duration::minutes(5)),
+                    MokaExpiration::new(exp),
                     Bytes::from(rmp_serde::to_vec(&state)?),
                 ),
             )
+            .await;
+        self.state
+            .cache
+            .set_passkey_ph_session(user_id, (MokaExpiration::new(exp), Arc::new(kv)))
             .await;
         Ok(rcr)
     }
 
     pub async fn finish_passkey_authentication(
         &self,
+        user_id: i64,
         user_name: impl Into<String>,
         auth: PublicKeyCredential,
-    ) -> MFAServiceResult<AuthenticationResult> {
+    ) -> MFAServiceResult<(AuthenticationResult, i64)> {
         let (_, info) = self
             .state
             .cache
             .get_passkey_auth_session(user_name.into())
             .await
-            .ok_or(MFAServiceError::Authn(InvalidWebauthnRpOrigin))?;
+            .ok_or(MFAServiceError::Authn(AuthnError::InvalidWebauthnState))?;
+        let (_, kv) = self
+            .state
+            .cache
+            .get_passkey_ph_session(user_id)
+            .await
+            .ok_or(MFAServiceError::Authn(AuthnError::InvalidWebauthnState))?;
         let info = rmp_serde::from_slice::<WebauthnState<PasskeyAuthentication>>(&info)
             .map_err(MFAServiceError::from)?;
-        Ok(self
+        let res = self
             .webauthn
             .finish_passkey_authentication(&auth, &info.state)
-            .map_err(AuthnError::from)?)
+            .map_err(AuthnError::from)?;
+        let idx =
+            kv.f.get(auth.raw_id.as_ref())
+                .ok_or(MFAServiceError::Authn(AuthnError::MismatchWebAuthnKV))?;
+        let id = kv
+            .idx2id
+            .get(idx as usize)
+            .ok_or(MFAServiceError::Authn(AuthnError::MismatchWebAuthnKV))?;
+        Ok((res, *id))
     }
 }

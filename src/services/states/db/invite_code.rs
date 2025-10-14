@@ -73,7 +73,7 @@ where
             query!(
                 r#"
                     UPDATE invite_codes
-                    SET is_used = 1, used_at = CURRENT_TIMESTAMP, used_by = ?
+                    SET is_used = 1, used_at = strftime('%s','now'), used_by = ?
                     WHERE code = ?
                 "#,
                 user_id,

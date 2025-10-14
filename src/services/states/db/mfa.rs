@@ -3,7 +3,7 @@ use crate::models::mfa::{
     NewTotpCredential, NewWebauthnCredential, TotpCredential, WebauthnCredential,
 };
 use crate::services::states::db::{
-    DataBaseResult, PageQueryBinder, PageQueryResult, SqliteBaseResultExt,
+    DataBaseResult, PageQueryBinder, PageQueryResult, SqliteBaseResultExt, SqliteQueryResultExt,
 };
 use sqlx::{Executor, Sqlite, query, query_as, query_scalar};
 use time::OffsetDateTime;
@@ -186,7 +186,7 @@ where
         query!("DELETE FROM totp_credentials WHERE user_id = ?", user_id)
             .execute(&mut *self.inner)
             .await
-            .resolve()?;
+            .resolve_affected()?;
         self.insert_mfa_op_log_with_ctx(NewMfaAuthLog {
             user_id,
             op_type: MFAOpType::Delete,
@@ -239,7 +239,7 @@ where
         )
         .execute(&mut *self.inner)
         .await
-        .resolve()?;
+        .resolve_affected()?;
         Ok(())
     }
 
@@ -302,7 +302,7 @@ where
             )
             .execute(&mut *self.inner)
             .await
-            .resolve()?;
+            .resolve_affected()?;
             self.insert_mfa_op_log_with_ctx(NewMfaAuthLog {
                 user_id,
                 op_type: MFAOpType::Delete,
@@ -387,7 +387,7 @@ where
         )
         .execute(&mut *self.inner)
         .await
-        .resolve()?;
+        .resolve_affected()?;
         Ok(())
     }
 

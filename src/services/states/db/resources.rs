@@ -44,7 +44,7 @@ where
             match diff.kind {
                 Change::Added => {
                     query!(
-                        "INSERT INTO resource_references (res_id, target_id, target_type) VALUES ($1, $2, $3)",
+                        "INSERT INTO resource_references (res_id, target_id, target_type) VALUES (?, ?, ?)",
                         diff.value.res_id,
                         diff.value.target_id,
                         diff.value.target_type
@@ -55,7 +55,7 @@ where
                 }
                 Change::Removed => {
                     query!(
-                        "DELETE FROM resource_references WHERE res_id = $1 AND target_id = $2 AND target_type = $3",
+                        "DELETE FROM resource_references WHERE res_id = ? AND target_id = ? AND target_type = ?",
                         diff.value.res_id,
                         diff.value.target_id,
                         diff.value.target_type
@@ -75,7 +75,7 @@ where
     ) -> DataBaseResult<()> {
         for res in res_ids {
             query!(
-                "DELETE FROM resource_references WHERE res_id = $1 AND target_id = $2 AND target_type = $3",
+                "DELETE FROM resource_references WHERE res_id = ? AND target_id = ? AND target_type = ?",
                 res.res_id,
                 res.target_id,
                 res.target_type

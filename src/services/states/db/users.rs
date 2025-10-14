@@ -1,6 +1,6 @@
 use crate::models::resource::ResourceTarget;
 use crate::models::users::{Role, UserRow, UserRowOptional};
-use crate::services::states::db::{DataBaseResult, SqliteBaseResultExt};
+use crate::services::states::db::{DataBaseResult, SqliteBaseResultExt, SqliteQueryResultExt};
 use sqlx::{Executor, Sqlite, query, query_as, query_scalar};
 use time::OffsetDateTime;
 
@@ -32,7 +32,7 @@ where
         role: Role,
     ) -> DataBaseResult<i64> {
         query!(
-            "INSERT INTO users (username, password_hash, role) VALUES ($1, $2, $3)",
+            "INSERT INTO users (username, password_hash, role) VALUES (?, ?, ?)",
             username,
             password_hash,
             role,
@@ -67,11 +67,11 @@ where
         query!(
             r#"
                 UPDATE users
-                SET username      = COALESCE($1, username),
-                    password_hash = COALESCE($2, password_hash),
-                    role          = COALESCE($3, role),
-                    avatar_res_id = COALESCE($4, avatar_res_id)
-                WHERE id = $5
+                SET username      = COALESCE(?, username),
+                    password_hash = COALESCE(?, password_hash),
+                    role          = COALESCE(?, role),
+                    avatar_res_id = COALESCE(?, avatar_res_id)
+                WHERE id = ?
             "#,
             update_user.username,
             update_user.password_hash,
@@ -81,7 +81,7 @@ where
         )
         .execute(&mut *self.inner)
         .await
-        .resolve()?;
+        .resolve_affected()?;
         if let Some(id) = update_user.avatar_res_id {
             self.link_user_avatar_res(id, update_user.id).await?;
         }
@@ -116,10 +116,10 @@ where
     }
 
     pub async fn remove_user_by_username(&mut self, username: &str) -> DataBaseResult<()> {
-        query!("DELETE FROM users WHERE username = $1", username,)
-            .fetch_one(&mut *self.inner)
+        query!("DELETE FROM users WHERE username = ?", username)
+            .execute(&mut *self.inner)
             .await
-            .resolve()?;
+            .resolve_affected()?;
         Ok(())
     }
 
@@ -127,10 +127,10 @@ where
         &mut self,
         user_id: i64,
     ) -> DataBaseResult<()> {
-        query!("DELETE FROM users WHERE id = $1", user_id,)
+        query!("DELETE FROM users WHERE id = ?", user_id)
             .execute(&mut *self.inner)
             .await
-            .resolve()?;
+            .resolve_affected()?;
         Ok(())
     }
 

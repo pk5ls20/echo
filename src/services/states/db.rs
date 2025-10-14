@@ -53,12 +53,6 @@ pub enum DataBaseError {
         #[backtrace]
         backtrace: Backtrace,
     },
-    #[error("Internal error: {msg}")]
-    Internal {
-        msg: &'static str,
-        #[backtrace]
-        backtrace: Backtrace,
-    },
     #[error("sqlx error: {0}")]
     SqlxOther(#[from] sqlx::Error),
     #[error("DynSetting parse error: {err}")]
@@ -85,25 +79,6 @@ pub struct PageQueryBinder {
 pub struct PageQueryInner {
     pub start_after: i64,
     pub limit: u32,
-}
-
-#[derive(Debug, Serialize, Deserialize)]
-pub struct NeverRetPageQueryItem {
-    idx: i64,
-}
-
-impl NeverRetPageQueryItem {
-    pub fn from_range(start: i64, size: i64) -> Vec<Self> {
-        (start..start + size)
-            .map(|idx| NeverRetPageQueryItem { idx })
-            .collect()
-    }
-}
-
-impl PageQueryCursor for NeverRetPageQueryItem {
-    fn cursor_field(&self) -> i64 {
-        self.idx
-    }
 }
 
 #[derive(Debug, Serialize, Deserialize)]

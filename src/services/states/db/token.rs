@@ -1,5 +1,5 @@
 use crate::models::token::AuthTokenRaw;
-use crate::services::states::db::{DataBaseResult, SqliteBaseResultExt};
+use crate::services::states::db::{DataBaseResult, SqliteBaseResultExt, SqliteQueryResultExt};
 use sqlx::{Executor, Sqlite, query, query_as};
 use time::OffsetDateTime;
 
@@ -69,15 +69,15 @@ where
         query!(
             r#"
                 UPDATE auth_tokens
-                SET last_used_at = CURRENT_TIMESTAMP
+                SET last_used_at = strftime('%s','now')
                 WHERE user_id = ? AND token = ?
             "#,
             user_id,
             token
         )
-        .fetch_one(&mut *self.inner)
+        .execute(&mut *self.inner)
         .await
-        .resolve()?;
+        .resolve_affected()?;
         Ok(())
     }
 }

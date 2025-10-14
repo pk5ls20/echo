@@ -1,4 +1,5 @@
 use crate::services::states::db::PageQueryCursor;
+use ph::fmph;
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use sqlx::FromRow;
@@ -136,4 +137,9 @@ pub struct MfaInfo {
     #[serde(with = "time::serde::timestamp")]
     pub updated_at: OffsetDateTime,
     pub available_methods: Vec<MFAAuthMethod>,
+}
+
+pub struct WebAuthnKV {
+    pub f: fmph::GOFunction,
+    pub idx2id: Vec<i64>,
 }

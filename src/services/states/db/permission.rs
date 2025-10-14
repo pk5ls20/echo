@@ -1,7 +1,7 @@
 use crate::models::permission::{Permission, RawUserPermissionRow, UserAssignedPermission};
 use crate::models::users::Role;
 use crate::services::states::db::{
-    DataBaseResult, PageQueryBinder, PageQueryResult, SqliteBaseResultExt,
+    DataBaseResult, PageQueryBinder, PageQueryResult, SqliteBaseResultExt, SqliteQueryResultExt,
 };
 use ahash::HashSet;
 use sqlx::{Executor, Sqlite, query, query_as};
@@ -44,15 +44,15 @@ where
         )
         .execute(&mut *self.inner)
         .await
-        .resolve()?;
+        .resolve_affected()?;
         Ok(())
     }
 
     pub async fn delete_permission(&mut self, pm_id: i64) -> DataBaseResult<()> {
-        query!("DELETE FROM permissions WHERE id = ?", pm_id,)
+        query!("DELETE FROM permissions WHERE id = ?", pm_id)
             .execute(&mut *self.inner)
             .await
-            .resolve()?;
+            .resolve_affected()?;
         Ok(())
     }
 
@@ -190,16 +190,16 @@ where
         for &pid in permission_ids {
             query!(
                 r#"
-                UPDATE user_permissions
-                SET revoked_at = CURRENT_TIMESTAMP
-                WHERE user_id = ? AND permission_id = ?
-            "#,
+                    UPDATE user_permissions
+                    SET revoked_at = strftime('%s','now')
+                    WHERE user_id = ? AND permission_id = ?
+                "#,
                 user_id,
                 pid
             )
             .execute(&mut *self.inner)
             .await
-            .resolve()?;
+            .resolve_affected()?;
         }
         Ok(())
     }

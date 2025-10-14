@@ -1,10 +1,10 @@
 use crate::models::echo::{Echo, EchoFullViewRaw};
 use crate::models::resource::ResourceTarget;
 use crate::services::states::db::{
-    DataBaseResult, PageQueryBinder, PageQueryResult, SqliteBaseResultExt,
+    DataBaseResult, PageQueryBinder, PageQueryResult, SqliteBaseResultExt, SqliteQueryResultExt,
 };
 use sqlx::types::Json;
-use sqlx::{Executor, Sqlite, query, query_as, query_scalar};
+use sqlx::{Executor, Sqlite, query, query_as};
 use time::OffsetDateTime;
 
 pub struct EchoRepo<'a, E>
@@ -25,7 +25,8 @@ where
             ResourceTarget::Echo
         )
         .execute(&mut *self.inner)
-        .await?; // prefer not resolve here
+        .await
+        .resolve()?; // missing resource is fine on here, just use resolve
         for res_id in res_ids {
             query!(
                 "INSERT INTO resource_references (res_id, target_id, target_type) VALUES (?, ?, ?)",
@@ -47,7 +48,8 @@ where
     ) -> DataBaseResult<()> {
         query!("DELETE FROM echo_permissions WHERE echo_id = ?", echo_id)
             .execute(&mut *self.inner)
-            .await?; // prefer not resolve here
+            .await
+            .resolve()?; // missing resource is fine on here, just use resolve
         for perm_id in permission_ids {
             query!(
                 "INSERT INTO echo_permissions (echo_id, permission_id) VALUES (?, ?)",
@@ -93,16 +95,16 @@ where
         new_permission_ids: &[i64],
         is_private: bool,
     ) -> DataBaseResult<()> {
-        query_scalar!(
+        query!(
             // language=sql
-            "UPDATE echos SET content = ?, is_private = ? WHERE id = ?",
+            "UPDATE echos SET content = ?, is_private = ?, last_modified_at = strftime('%s','now') WHERE id = ?",
             new_content,
             is_private,
             echo_id,
         )
-        .fetch_one(&mut *self.inner)
+        .execute(&mut *self.inner)
         .await
-        .resolve()?;
+        .resolve_affected()?;
         self.link_echo_res(echo_id, new_resource_ids).await?;
         self.link_echo_permission(echo_id, new_permission_ids)
             .await?;
@@ -110,16 +112,16 @@ where
     }
 
     pub async fn delete_echo(&mut self, echo_id: i64) -> DataBaseResult<()> {
-        query_scalar!(
+        query!(
             // language=sql
             "DELETE FROM echos WHERE id = ?",
             echo_id
         )
-        .fetch_one(&mut *self.inner)
+        .execute(&mut *self.inner)
         .await
-        .resolve()?;
+        .resolve_affected()?;
         self.link_echo_res(echo_id, &[]).await?;
-        self.link_echo_permission(echo_id, &[]).await?;
+        self.link_echo_permission(echo_id, &[]).await?; // so it's not necessary
         Ok(())
     }
 
